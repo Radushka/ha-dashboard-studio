@@ -14,8 +14,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
-from .const import DOMAIN, PANEL, URL_BASE
+from .const import DOMAIN, PANEL, PRO, URL_BASE
 from .layout import LayoutStore
+from .license import ProManager
 from .websocket import async_register_commands
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -26,6 +27,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Register the files and the websocket commands once, when Home Assistant starts."""
     hass.data[DOMAIN] = LayoutStore(hass)
     await hass.data[DOMAIN].async_load()
+    hass.data[PRO] = ProManager(hass)
+    await hass.data[PRO].async_load()
+    hass.data[PRO].async_start()
     async_register_commands(hass)
     # No cache headers: index.html must always be fresh. The asset files have a hash in their names.
     await hass.http.async_register_static_paths([StaticPathConfig(URL_BASE, str(WWW), False)])

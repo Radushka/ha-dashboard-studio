@@ -10,8 +10,9 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
-from .const import DOMAIN
+from .const import DOMAIN, PRO
 from .layout import LayoutStore
+from .license import LicenseProblem, ProManager
 
 # A layout is a few hundred kilobytes at most, even with many screens. This stops a mistake from filling the disk.
 MAX_LAYOUT = 2_000_000
@@ -26,6 +27,9 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get)
     websocket_api.async_register_command(hass, ws_publish)
     websocket_api.async_register_command(hass, ws_subscribe)
+    websocket_api.async_register_command(hass, ws_pro)
+    websocket_api.async_register_command(hass, ws_pro_activate)
+    websocket_api.async_register_command(hass, ws_pro_remove)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "hadash/layout"})
@@ -64,3 +68,33 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
 
     connection.subscriptions[msg["id"]] = store.async_listen(forward)
     connection.send_result(msg["id"])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "hadash/pro"})
+@callback
+def ws_pro(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Pro in this Home Assistant: {plan: pro | trial | free, daysLeft, license: {name, email, number} | null}."""
+    pro: ProManager = hass.data[PRO]
+    connection.send_result(msg["id"], pro.state())
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "hadash/pro/activate", vol.Required("license"): str})
+@websocket_api.async_response
+async def ws_pro_activate(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Turns a license on for this Home Assistant. The error message is written for the user."""
+    pro: ProManager = hass.data[PRO]
+    try:
+        connection.send_result(msg["id"], await pro.async_activate(msg["license"]))
+    except LicenseProblem as err:
+        connection.send_error(msg["id"], "license", str(err))
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "hadash/pro/remove"})
+@websocket_api.async_response
+async def ws_pro_remove(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Turns the license off here, so it can be used somewhere else."""
+    pro: ProManager = hass.data[PRO]
+    connection.send_result(msg["id"], await pro.async_remove())

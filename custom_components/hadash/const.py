@@ -7,3 +7,5 @@ URL_BASE = "/hadash"
 PANEL = "hadash-studio"
 STORAGE_KEY = "hadash.layout"
 STORAGE_VERSION = 1
+LICENSE_STORAGE_KEY = "hadash.license"
+PRO = "hadash_pro"
