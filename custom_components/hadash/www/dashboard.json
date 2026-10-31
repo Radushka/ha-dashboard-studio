@@ -1,0 +1,81 @@
+{
+  "title": "Home",
+  "grid": {
+    "columns": 12,
+    "rows": 1
+  },
+  "headerEntity": "sensor.outdoor_temperature",
+  "menu": [
+    {
+      "type": "weather",
+      "entity": "weather.home",
+      "label": "Weather",
+      "radar": "camera.front_door",
+      "sensors": {
+        "summary": "sensor.forecast",
+        "alerts": [
+          "sensor.warnings"
+        ],
+        "aqhi": "sensor.aqhi",
+        "pressure": "sensor.pressure",
+        "tendency": "sensor.tendency",
+        "visibility": "sensor.visibility",
+        "wind_gust": "sensor.wind_gust",
+        "dew_point": "sensor.dew_point",
+        "normal_high": "sensor.normal_high_temperature"
+      }
+    },
+    {
+      "type": "climate",
+      "entity": "climate.living_room",
+      "label": "Climate"
+    },
+    {
+      "type": "media",
+      "entity": "media_player.living_room",
+      "label": "Media"
+    },
+    {
+      "type": "status",
+      "label": "Status"
+    },
+    {
+      "type": "shades",
+      "label": "Shades"
+    },
+    {
+      "type": "family",
+      "label": "Family"
+    },
+    {
+      "type": "scenes",
+      "label": "Scenes"
+    }
+  ],
+  "widgets": [
+    {
+      "type": "room",
+      "area": "Living Room",
+      "x": 1,
+      "y": 1,
+      "w": 4,
+      "h": 1
+    },
+    {
+      "type": "room",
+      "area": "Kitchen",
+      "x": 5,
+      "y": 1,
+      "w": 4,
+      "h": 1
+    },
+    {
+      "type": "room",
+      "area": "Bedroom",
+      "x": 9,
+      "y": 1,
+      "w": 4,
+      "h": 1
+    }
+  ]
+}

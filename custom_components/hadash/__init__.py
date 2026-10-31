@@ -1,0 +1,52 @@
+"""Dashboard Studio: serves the wall-tablet dashboard and its studio, and keeps the published layout.
+
+The dashboard files come with this integration, so an update through HACS updates every tablet.
+The layout lives in Home Assistant's own storage, so it is part of every HA backup.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from homeassistant.components import frontend
+from homeassistant.components.http import StaticPathConfig
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
+
+from .const import DOMAIN, PANEL, URL_BASE
+from .layout import LayoutStore
+from .websocket import async_register_commands
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+WWW = Path(__file__).parent / "www"
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Register the files and the websocket commands once, when Home Assistant starts."""
+    hass.data[DOMAIN] = LayoutStore(hass)
+    await hass.data[DOMAIN].async_load()
+    async_register_commands(hass)
+    # No cache headers: index.html must always be fresh. The asset files have a hash in their names.
+    await hass.http.async_register_static_paths([StaticPathConfig(URL_BASE, str(WWW), False)])
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Show the studio in the sidebar, for admins only."""
+    frontend.async_register_built_in_panel(
+        hass,
+        component_name="iframe",
+        sidebar_title="Dashboard Studio",
+        sidebar_icon="mdi:palette-outline",
+        frontend_url_path=PANEL,
+        config={"url": f"{URL_BASE}/studio.html"},
+        require_admin=True,
+    )
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Remove the sidebar item. The files and the layout stay until Home Assistant restarts."""
+    frontend.async_remove_panel(hass, PANEL)
+    return True

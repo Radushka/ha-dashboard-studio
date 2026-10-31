@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Dashboard Studio",
+        "description": "Adds the wall-tablet dashboard at /hadash/index.html and the Dashboard Studio to the sidebar."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Dashboard Studio is already set up."
+    }
+  }
+}

@@ -1,0 +1,46 @@
+"""The published layout, kept in Home Assistant's storage (.storage/hadash.layout)."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
+
+from .const import STORAGE_KEY, STORAGE_VERSION
+
+
+class LayoutStore:
+    """Holds the layout and tells every open tablet when a new one is published."""
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self.data: dict[str, Any] = {}
+        self._listeners: set[Callable[[dict[str, Any]], None]] = set()
+
+    async def async_load(self) -> None:
+        self.data = await self._store.async_load() or {}
+
+    @property
+    def layout(self) -> dict[str, Any] | None:
+        return self.data.get("layout")
+
+    async def async_publish(self, layout: dict[str, Any], user: str | None) -> dict[str, Any]:
+        """Save a new layout and send it to everyone listening. The revision tells tablets it changed."""
+        self.data = {
+            "layout": layout,
+            "revision": self.data.get("revision", 0) + 1,
+            "published_at": dt_util.utcnow().isoformat(),
+            "published_by": user,
+        }
+        await self._store.async_save(self.data)
+        for listener in list(self._listeners):
+            listener(self.data)
+        return self.data
+
+    @callback
+    def async_listen(self, listener: Callable[[dict[str, Any]], None]) -> Callable[[], None]:
+        self._listeners.add(listener)
+        return lambda: self._listeners.discard(listener)
