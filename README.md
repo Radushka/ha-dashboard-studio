@@ -4,7 +4,14 @@ Beautiful dashboards for Home Assistant wall tablets: a glass look, large calm t
 
 ![A Dashboard Studio dashboard on a 10-inch tablet](https://raw.githubusercontent.com/Radushka/ha-dashboard-studio/main/images/dashboard.jpg)
 
-## Install with HACS
+## Install in Home Assistant 2026.11 or later (Marketplace)
+
+1. Go to **Settings > Marketplace**.
+2. Add `https://github.com/Radushka/ha-dashboard-studio` as a custom repository (Home Assistant asks you to sign in to GitHub once for this).
+3. Find **Dashboard Studio** in the Marketplace and install it. Restart Home Assistant if it asks you to.
+4. Go to **Settings > Devices & services > Add integration** and add **Dashboard Studio**.
+
+## Install in Home Assistant 2026.10 (HACS)
 
 1. In HACS, open the menu (⋮) and choose **Custom repositories**.
 2. Add `https://github.com/Radushka/ha-dashboard-studio` with the type **Integration**.
@@ -12,11 +19,13 @@ Beautiful dashboards for Home Assistant wall tablets: a glass look, large calm t
 4. Restart Home Assistant.
 5. Go to **Settings > Devices & services > Add integration** and add **Dashboard Studio**.
 
+If you update from 2026.10 to 2026.11, you do not need to do anything. Home Assistant moves Dashboard Studio from HACS to the Marketplace by itself, and updates keep working.
+
 ## Install by hand
 
 1. Download `hadash.zip` from the newest [release](https://github.com/Radushka/ha-dashboard-studio/releases).
 2. Unpack it into `config/custom_components/hadash/`.
-3. Restart Home Assistant and add the integration as in step 5 above.
+3. Restart Home Assistant and add the integration in Settings > Devices & services.
 
 ## Use it
 
