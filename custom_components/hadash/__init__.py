@@ -14,7 +14,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
-from .const import DOMAIN, PANEL, PRO, URL_BASE
+from .const import DOMAIN, PANEL, PRO, URL_BASE, VERSION
 from .layout import LayoutStore
 from .license import ProManager
 from .websocket import async_register_commands
@@ -40,11 +40,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Show the studio in the sidebar, for admins only."""
     frontend.async_register_built_in_panel(
         hass,
-        component_name="iframe",
+        # A custom panel, not an iframe panel: HA then draws no title bar, and the studio's own
+        # top bar (with a ☰ button for HA's sidebar on narrow screens) uses the whole height.
+        component_name="custom",
         sidebar_title="Dashboard Studio",
         sidebar_icon="mdi:palette-outline",
         frontend_url_path=PANEL,
-        config={"url": f"{URL_BASE}/studio.html"},
+        config={
+            "_panel_custom": {
+                "name": "hadash-studio-panel",
+                "module_url": f"{URL_BASE}/panel.js?v={VERSION}",
+                "embed_iframe": False,
+                "trust_external": False,
+            }
+        },
         require_admin=True,
     )
     return True

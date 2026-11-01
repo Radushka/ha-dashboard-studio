@@ -9,3 +9,9 @@ STORAGE_KEY = "hadash.layout"
 STORAGE_VERSION = 1
 LICENSE_STORAGE_KEY = "hadash.license"
 PRO = "hadash_pro"
+
+# The integration's version, from its manifest. It is read once, when the module is imported.
+import json as _json
+from pathlib import Path as _Path
+
+VERSION: str = _json.loads((_Path(__file__).parent / "manifest.json").read_text())["version"]
