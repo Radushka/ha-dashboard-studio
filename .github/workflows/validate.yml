@@ -1,5 +1,5 @@
 # Checks the integration the way Home Assistant and the Marketplace (formerly HACS) do.
-# Both checks must pass before the repository can be listed in the default Marketplace catalogue.
+# The license check is skipped: the code has its own license, not an open-source one.
 name: Validate
 
 on:
@@ -13,7 +13,7 @@ jobs:
   hassfest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: home-assistant/actions/hassfest@master
 
   hacs:
@@ -22,3 +22,6 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
+          # Our own license keeps all rights (Radu, 2026-11-03), so the open-source license check is skipped.
+          # This means the default Marketplace catalogue is not open to us; users add the repository by link.
+          ignore: license

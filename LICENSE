@@ -1,0 +1,28 @@
+Dashboard Studio for Home Assistant
+Copyright (c) 2026 ARB Consulting Inc. All rights reserved.
+
+This software is made available in source form so that it can be installed
+through the Home Assistant Marketplace (formerly HACS). It is not open source.
+
+You may:
+1. Install and use this software, free of charge, on Home Assistant systems
+   that you own or manage, for personal or business use.
+2. Read the source code to understand how it works or to check its safety.
+
+You may not, without written permission from ARB Consulting Inc.:
+1. Copy, publish, share or sell this software or any modified version of it,
+   in whole or in part.
+2. Remove, change or get around the license check that unlocks Pro features,
+   or use Pro features without a valid Dashboard Studio license.
+3. Use the code, its designs or its pictures in another product.
+
+Pro features require a paid license from https://lukaps.com/dashboardstudio/.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL ARB
+CONSULTING INC. BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Contact: https://lukaps.com/dashboardstudio/support/
