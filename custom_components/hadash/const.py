@@ -7,6 +7,9 @@ URL_BASE = "/hadash"
 PANEL = "hadash-studio"
 STORAGE_KEY = "hadash.layout"
 STORAGE_VERSION = 1
+# The last published versions, so a publish can be taken back from the studio.
+HISTORY_STORAGE_KEY = "hadash.history"
+HISTORY_KEEP = 20
 LICENSE_STORAGE_KEY = "hadash.license"
 PRO = "hadash_pro"
 

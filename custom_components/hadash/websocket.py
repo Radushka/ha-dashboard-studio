@@ -27,6 +27,8 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get)
     websocket_api.async_register_command(hass, ws_publish)
     websocket_api.async_register_command(hass, ws_subscribe)
+    websocket_api.async_register_command(hass, ws_history)
+    websocket_api.async_register_command(hass, ws_version)
     websocket_api.async_register_command(hass, ws_pro)
     websocket_api.async_register_command(hass, ws_pro_activate)
     websocket_api.async_register_command(hass, ws_pro_remove)
@@ -68,6 +70,28 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
 
     connection.subscriptions[msg["id"]] = store.async_listen(forward)
     connection.send_result(msg["id"])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "hadash/layout/history"})
+@callback
+def ws_history(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """The last published versions, newest first: revision, when, by whom, and how many cards and screens."""
+    store: LayoutStore = hass.data[DOMAIN]
+    connection.send_result(msg["id"], {"versions": store.versions()})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "hadash/layout/version", vol.Required("revision"): int})
+@callback
+def ws_version(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """One kept version with its layout, so the studio can open it. Nothing changes until it is published."""
+    store: LayoutStore = hass.data[DOMAIN]
+    version = store.version(msg["revision"])
+    if version is None:
+        connection.send_error(msg["id"], "not_found", "That version is no longer kept.")
+        return
+    connection.send_result(msg["id"], version)
 
 
 @websocket_api.require_admin
