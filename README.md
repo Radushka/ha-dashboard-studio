@@ -2,14 +2,16 @@
 
 Beautiful dashboards for Home Assistant wall tablets: a glass look, large calm type, and rooms first. This integration serves the dashboard to your tablets and keeps your layout. Design it in the web studio inside Home Assistant, or in the [Dashboard Studio Mac app](https://lukaps.com/dashboardstudio/).
 
-![A Dashboard Studio dashboard on a 10-inch tablet](https://raw.githubusercontent.com/Radushka/ha-dashboard-studio/main/images/dashboard.jpg)
+![Dashboard Studio: beautiful Home Assistant wall tablets, shown with a dashboard of rooms, weather and a camera](https://raw.githubusercontent.com/Radushka/ha-dashboard-studio/main/images/dashboard.jpg)
+
+![A Dashboard Studio dashboard on a 10-inch tablet: clock, weather and three rooms with their lights](https://raw.githubusercontent.com/Radushka/ha-dashboard-studio/main/images/dashboard-full.jpg)
 
 ## Install in Home Assistant 2026.11 or later (Marketplace)
 
-1. Go to **Settings > Marketplace**.
-2. Add `https://github.com/Radushka/ha-dashboard-studio` as a custom repository (Home Assistant asks you to sign in to GitHub once for this).
-3. Find **Dashboard Studio** in the Marketplace and install it. Restart Home Assistant if it asks you to.
-4. Go to **Settings > Devices & services > Add integration** and add **Dashboard Studio**.
+1. Go to **Settings > Marketplace**. The first time, tick **I understand the risks and agree**.
+2. Choose **Add from link** and enter `https://github.com/Radushka/ha-dashboard-studio`. Home Assistant asks you to connect GitHub once, with a short code.
+3. Install **Dashboard Studio**. No restart is needed.
+4. Press **Set up** to finish. Dashboard Studio then appears in the sidebar.
 
 ## Install in Home Assistant 2026.10 (HACS)
 
