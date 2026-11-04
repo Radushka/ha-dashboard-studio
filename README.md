@@ -8,6 +8,10 @@ Beautiful dashboards for Home Assistant wall tablets: a glass look, large calm t
 
 ## Install in Home Assistant 2026.11 or later (Marketplace)
 
+[![Open Dashboard Studio in your Home Assistant](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Radushka&repository=ha-dashboard-studio&category=integration)
+
+The button opens Dashboard Studio in your own Home Assistant. You can also follow these steps.
+
 1. Go to **Settings > Marketplace**. The first time, tick **I understand the risks and agree**.
 2. Choose **Add from link** and enter `https://github.com/Radushka/ha-dashboard-studio`. Home Assistant asks you to connect GitHub once, with a short code.
 3. Install **Dashboard Studio**. No restart is needed.
@@ -42,6 +46,6 @@ Home Assistant 2026.10 or later.
 
 ## Help
 
-[Support page](https://lukaps.com/dashboardstudio/support/) or support@lukaps.com.
+[Support page](https://lukaps.com/dashboardstudio/support/) or support@lukaps.com. To report a bug, open an [issue](https://github.com/Radushka/ha-dashboard-studio/issues).
 
 © 2026 ARB Consulting Inc.
