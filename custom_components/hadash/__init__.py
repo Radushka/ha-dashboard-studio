@@ -17,6 +17,7 @@ from homeassistant.helpers import config_validation as cv
 from .const import DOMAIN, PANEL, PRO, URL_BASE, VERSION
 from .layout import LayoutStore
 from .license import ProManager
+from .photos import PhotoView
 from .websocket import async_register_commands
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -31,6 +32,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     await hass.data[PRO].async_load()
     hass.data[PRO].async_start()
     async_register_commands(hass)
+    hass.http.register_view(PhotoView())
     # No cache headers: index.html must always be fresh. The asset files have a hash in their names.
     await hass.http.async_register_static_paths([StaticPathConfig(URL_BASE, str(WWW), False)])
     return True
