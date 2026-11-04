@@ -38,6 +38,8 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_update)
     websocket_api.async_register_command(hass, ws_install)
     websocket_api.async_register_command(hass, ws_restart)
+    websocket_api.async_register_command(hass, ws_saver_show)
+    websocket_api.async_register_command(hass, ws_saver_subscribe)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "hadash/layout"})
@@ -128,3 +130,29 @@ async def ws_pro_remove(hass: HomeAssistant, connection: websocket_api.ActiveCon
     """Turns the license off here, so it can be used somewhere else."""
     pro: ProManager = hass.data[PRO]
     connection.send_result(msg["id"], await pro.async_remove())
+
+
+# "Show now" in the studio: the tablets of one screen start their screensaver at once, to try it out.
+SAVER_EVENT = "hadash_saver"
+
+
+@websocket_api.websocket_command({vol.Required("type"): "hadash/saver/show", vol.Optional("screen", default=""): str})
+@websocket_api.require_admin
+@callback
+def ws_saver_show(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Asks the tablets of a screen ("" is the main layout) to show their screensaver now."""
+    hass.bus.async_fire(SAVER_EVENT, {"screen": msg["screen"]})
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command({vol.Required("type"): "hadash/saver/subscribe"})
+@callback
+def ws_saver_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Passes "Show now" on to a tablet. Like the layout, this works for non-admin logins too."""
+
+    @callback
+    def forward(event: Any) -> None:
+        connection.send_message(websocket_api.event_message(msg["id"], {"screen": event.data.get("screen", "")}))
+
+    connection.subscriptions[msg["id"]] = hass.bus.async_listen(SAVER_EVENT, forward)
+    connection.send_result(msg["id"])
