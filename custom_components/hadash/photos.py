@@ -38,7 +38,8 @@ MAX_SIDE = 2560
 LOCAL_PREFIX = "media-source://media_source/"
 
 
-# iPhone photos (HEIC) open only when Pillow has the HEIF plugin; without it they are left out.
+# iPhone photos (HEIC) open only when Pillow has the HEIF plugin, or through Synology's JPEG copy;
+# otherwise they are left out.
 HEIF = (".heic", ".heif")
 
 
@@ -52,12 +53,52 @@ def _heif_ok() -> bool:
     return True
 
 
+def _is_heif(media_id: str, title: str = "", kind: str = "") -> bool:
+    name = f"{media_id} {title}".lower()
+    return any(ext in name or kind.endswith(ext[1:]) for ext in HEIF)
+
+
 def _is_photo(item: Any, heif: bool) -> bool:
     kind = str(getattr(item, "media_content_type", "") or "")
     if not (getattr(item, "media_class", None) == "image" or kind.startswith("image/")):
         return False
-    name = f"{item.media_content_id} {item.title or ''}".lower()
-    return heif or not any(ext in name or kind.endswith(ext[1:]) for ext in HEIF)
+    # Synology and Immich make their own JPEG copy of every photo, so their HEIC photos always work.
+    if heif or item.media_content_id.startswith(CONVERTS):
+        return True
+    return not _is_heif(item.media_content_id, item.title or "", kind)
+
+
+SYNO_PREFIX = "media-source://synology_dsm/"
+# Immich's "fullsize" address gives a JPEG for formats a browser cannot show, HEIC included.
+CONVERTS = (SYNO_PREFIX, "media-source://immich/")
+
+
+async def _synology_preview(hass: HomeAssistant, media_id: str) -> bytes | None:
+    """Synology Photos' own JPEG copy ("xl", about 1280 pixels). It works for HEIC too.
+
+    This reaches into the Synology DSM integration, so any change there only turns it off.
+    """
+    if not media_id.startswith(SYNO_PREFIX):
+        return None
+    try:
+        from homeassistant.components.synology_dsm.media_source import (  # noqa: PLC0415
+            SynologyPhotosMediaSourceIdentifier,
+        )
+        from synology_dsm.api.photos.model import SynoPhotosItem  # noqa: PLC0415
+
+        ident = SynologyPhotosMediaSourceIdentifier(media_id[len(SYNO_PREFIX) :])
+        if not ident.cache_key:
+            return None
+        entry = hass.config_entries.async_entry_for_domain_unique_id("synology_dsm", ident.unique_id)
+        photos = entry.runtime_data.api.photos if entry and getattr(entry, "runtime_data", None) else None
+        if photos is None:
+            return None
+        item_id = int(ident.cache_key.split("_")[0])
+        item = SynoPhotosItem(item_id, "", ident.file_name or "", "", ident.cache_key, "xl", ident.is_shared, ident.passphrase)
+        return await photos.download_item_thumbnail(item)
+    except Exception as err:  # noqa: BLE001 - fall back to the original
+        _LOGGER.debug("Synology preview for %s failed: %s", media_id, err)
+        return None
 
 
 async def async_list_photos(hass: HomeAssistant, media_id: str) -> tuple[str, list[dict[str, str]]]:
@@ -140,6 +181,23 @@ def _shrink(data: bytes, width: int, height: int) -> bytes:
         return out.getvalue()
 
 
+async def _photo(hass: HomeAssistant, media_id: str, width: int, height: int) -> bytes:
+    """The photo at the screen's size. HEIC from Synology comes as Synology's own JPEG copy."""
+    if _is_heif(media_id):
+        preview = await _synology_preview(hass, media_id)
+        if preview:
+            return await hass.async_add_executor_job(_shrink, preview, width, height)
+    original = await _original(hass, media_id)
+    try:
+        return await hass.async_add_executor_job(_shrink, original, width, height)
+    except Exception:
+        # Pillow cannot open it (for example HEIC under another name): try Synology's copy.
+        preview = await _synology_preview(hass, media_id)
+        if not preview:
+            raise
+        return await hass.async_add_executor_job(_shrink, preview, width, height)
+
+
 class PhotoView(HomeAssistantView):
     """One photo at the screen's size. The address comes signed from the photo list."""
 
@@ -164,8 +222,7 @@ class PhotoView(HomeAssistantView):
         body = self._cache.get(key)
         if body is None:
             try:
-                original = await _original(hass, media_id)
-                body = await hass.async_add_executor_job(_shrink, original, width, height)
+                body = await _photo(hass, media_id, width, height)
             except Exception as err:  # noqa: BLE001 - the tablet skips a photo it cannot load
                 _LOGGER.debug("Photo %s failed: %s", media_id, err)
                 return web.Response(status=404)
