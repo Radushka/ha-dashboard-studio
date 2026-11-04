@@ -112,12 +112,17 @@ async def async_list_photos(hass: HomeAssistant, media_id: str) -> tuple[str, li
     root = await media_source.async_browse_media(hass, media_id)
     heif = await hass.async_add_executor_job(_heif_ok)
     found: list[dict[str, str]] = []
+    # Synology can list one album twice (yours, and shared with you): each photo is used once.
+    seen: set[str] = set()
 
     async def walk(item: Any, depth: int) -> None:
         for child in item.children or []:
             if len(found) >= MAX_PHOTOS:
                 return
             if not child.can_expand and _is_photo(child, heif):
+                if child.media_content_id in seen:
+                    continue
+                seen.add(child.media_content_id)
                 found.append({"id": child.media_content_id, "title": child.title or ""})
             elif child.can_expand and depth < MAX_DEPTH:
                 try:
