@@ -43,10 +43,11 @@ class LayoutStore:
             "published_by": user,
         }
         await self._store.async_save(self.data)
-        self.history = [self._version(self.data), *self.history][:HISTORY_KEEP]
-        await self._history_store.async_save({"versions": self.history})
+        # Tablets get the new layout as soon as it is saved. The history is written after, so it never delays them.
         for listener in list(self._listeners):
             listener(self.data)
+        self.history = [self._version(self.data), *self.history][:HISTORY_KEEP]
+        await self._history_store.async_save({"versions": self.history})
         return self.data
 
     @staticmethod
