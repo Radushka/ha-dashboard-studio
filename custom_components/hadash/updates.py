@@ -1,4 +1,7 @@
-"""Updates from the studio: find the HACS update for Dashboard Studio, install it, and restart only when needed.
+"""Updates from the studio: find the update entity for Dashboard Studio, install it, and restart only when needed.
+
+The update entity comes from HACS before Home Assistant 2026.11, and from the built-in Marketplace (domain
+"marketplace") from 2026.11 on. The Marketplace keeps the entity id, and makes its restart notices the same way.
 
 The screens and the studio are served straight from this folder, so new files reach every tablet at once,
 with no restart. Only a change in the Python code needs Home Assistant to restart. The code that runs now
@@ -23,6 +26,9 @@ from homeassistant.helpers import issue_registry as ir
 from .const import DOMAIN, VERSION
 
 HERE = Path(__file__).parent
+
+# Where our updates come from: HACS before Home Assistant 2026.11, the built-in Marketplace after.
+STORES = ("marketplace", "hacs")
 
 
 def code_fingerprint(folder: Path = HERE) -> str:
@@ -54,7 +60,10 @@ RUNNING = code_fingerprint()
 
 
 def _is_ours(state: State) -> bool:
-    """HACS names its entity "<name> update" and shows our brand icon; either one is enough."""
+    """The store names its entity after us and shows our brand icon; either one is enough.
+
+    HACS uses brands.home-assistant.io/_/hadash/icon.png, the Marketplace /api/brands/integration/hadash/icon.png.
+    """
     picture = str(state.attributes.get("entity_picture") or "")
     if f"/_/{DOMAIN}/" in picture or f"/{DOMAIN}/icon" in picture:
         return True
@@ -63,23 +72,24 @@ def _is_ours(state: State) -> bool:
 
 
 def find_update_entity(hass: HomeAssistant) -> str | None:
-    """The update entity that HACS made for Dashboard Studio, or None (HACS missing, or installed by hand)."""
+    """The update entity that HACS or the Marketplace made for Dashboard Studio, or None (installed by hand)."""
     registry = er.async_get(hass)
     found: list[tuple[int, str]] = []
     for state in hass.states.async_all("update"):
         if not _is_ours(state):
             continue
         entry = registry.async_get(state.entity_id)
-        # A HACS entity first; another one with the same name only when there is nothing better.
-        found.append((0 if entry and entry.platform == "hacs" else 1, state.entity_id))
+        # A store's entity first; another one with the same name only when there is nothing better.
+        found.append((0 if entry and entry.platform in STORES else 1, state.entity_id))
     return min(found)[1] if found else None
 
 
-def _clear_hacs_restart_notice(hass: HomeAssistant) -> None:
-    """HACS asks for a restart after every integration update. When ours needs none, take that notice away."""
+def _clear_store_restart_notice(hass: HomeAssistant) -> None:
+    """HACS and the Marketplace ask for a restart after every integration update. When ours needs none,
+    take that notice away. Both name it restart_required_<repository id>_<version>, with our domain on it."""
     registry = ir.async_get(hass)
     for (domain, issue_id), issue in list(registry.issues.items()):
-        if domain == "hacs" and issue_id.startswith("restart_required_") and issue.issue_domain == DOMAIN:
+        if domain in STORES and issue_id.startswith("restart_required_") and issue.issue_domain == DOMAIN:
             ir.async_delete_issue(hass, domain, issue_id)
 
 
@@ -87,7 +97,7 @@ async def async_status(hass: HomeAssistant) -> dict[str, Any]:
     fingerprint, version = await hass.async_add_executor_job(_disk_state)
     restart_needed = fingerprint != RUNNING
     if not restart_needed:
-        _clear_hacs_restart_notice(hass)
+        _clear_store_restart_notice(hass)
     return {
         "entity_id": find_update_entity(hass),
         "running": VERSION,
@@ -108,10 +118,10 @@ async def ws_update(hass: HomeAssistant, connection: websocket_api.ActiveConnect
 @websocket_api.websocket_command({vol.Required("type"): "hadash/update/install"})
 @websocket_api.async_response
 async def ws_install(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
-    """Installs the newest version through HACS, then tells whether a restart is needed."""
+    """Installs the newest version through the Marketplace (or HACS), then tells whether a restart is needed."""
     entity_id = find_update_entity(hass)
     if entity_id is None:
-        connection.send_error(msg["id"], "not_found", "HACS does not offer an update for Dashboard Studio.")
+        connection.send_error(msg["id"], "not_found", "The Marketplace (or HACS) does not offer an update for Dashboard Studio.")
         return
     try:
         await hass.services.async_call(
