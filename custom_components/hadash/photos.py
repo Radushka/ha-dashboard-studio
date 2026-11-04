@@ -13,6 +13,7 @@ from datetime import timedelta
 from io import BytesIO
 import logging
 from pathlib import Path
+import sys
 from typing import Any
 from urllib.parse import quote
 
@@ -81,9 +82,14 @@ async def _synology_preview(hass: HomeAssistant, media_id: str) -> bytes | None:
     if not media_id.startswith(SYNO_PREFIX):
         return None
     try:
-        from homeassistant.components.synology_dsm.media_source import (  # noqa: PLC0415
-            SynologyPhotosMediaSourceIdentifier,
-        )
+        # Looked up by name on purpose. Synology DSM is optional, so it must not be
+        # a manifest dependency (that would install its library for everyone),
+        # and hassfest flags a plain import of another integration.
+        # Synology DSM has already loaded this module when its photos exist.
+        syno = sys.modules.get("homeassistant.components.synology_dsm.media_source")
+        if syno is None:
+            return None
+        SynologyPhotosMediaSourceIdentifier = syno.SynologyPhotosMediaSourceIdentifier  # noqa: N806
         from synology_dsm.api.photos.model import SynoPhotosItem  # noqa: PLC0415
 
         ident = SynologyPhotosMediaSourceIdentifier(media_id[len(SYNO_PREFIX) :])
