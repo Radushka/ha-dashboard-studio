@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Dashboard Studio Wall</title>
+<link rel="icon" href="../icons/icon-192.png">
+<style>
+  :root { --ink: #fff; --dim: rgba(255, 255, 255, 0.62); --green: #30d158; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { min-height: 100vh; min-height: 100dvh; }
+  body {
+    display: grid; place-items: center; padding: 24px 16px;
+    background: radial-gradient(120% 90% at 20% 0%, #24304a 0%, #10131c 55%, #07080c 100%);
+    color: var(--ink); font: 17px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .card {
+    width: min(560px, 100%); padding: 32px 28px; border-radius: 28px;
+    background: rgba(255, 255, 255, 0.07); box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  }
+  img { width: 64px; height: 64px; border-radius: 16px; display: block; }
+  h1 { margin: 18px 0 6px; font-size: 28px; letter-spacing: -0.01em; text-wrap: balance; }
+  p { margin: 0 0 18px; color: var(--dim); text-wrap: pretty; }
+  a.go {
+    display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 56px; border-radius: 16px;
+    background: var(--green); color: #04210c; font-weight: 700; font-size: 18px; text-decoration: none;
+  }
+  a.go:active { filter: brightness(0.9); }
+  ol { margin: 22px 0 0; padding-left: 22px; color: var(--dim); }
+  li { margin: 6px 0; text-wrap: pretty; }
+  .ver { margin-top: 18px; font-size: 14px; color: rgba(255, 255, 255, 0.4); }
+</style>
+</head>
+<body>
+<main class="card">
+  <img src="../icons/icon-192.png" alt="">
+  <h1 data-t="title">Dashboard Studio Wall</h1>
+  <p data-t="lead">The free app for wall tablets. It keeps your dashboard on screen, wakes when you walk up, and updates itself from Home Assistant.</p>
+  <a class="go" id="get" href="wall.apk" download><span data-t="get">Download the app</span></a>
+  <ol>
+    <li data-t="s1">Open this page on the Android or Fire tablet.</li>
+    <li data-t="s2">Tap Download, then open the file.</li>
+    <li data-t="s3">If Android asks, allow installs from this browser, then tap Install.</li>
+    <li data-t="s4">Open the app. It finds your Home Assistant by itself.</li>
+  </ol>
+  <div class="ver" id="ver"></div>
+</main>
+<script>
+  var words = {
+    fr: { lead: "L'app gratuite pour les tablettes murales. Elle garde votre tableau de bord à l'écran, se réveille quand vous approchez et se met à jour depuis Home Assistant.", get: "Télécharger l'app", s1: "Ouvrez cette page sur la tablette Android ou Fire.", s2: "Touchez Télécharger, puis ouvrez le fichier.", s3: "Si Android le demande, autorisez les installations depuis ce navigateur, puis touchez Installer.", s4: "Ouvrez l'app. Elle trouve votre Home Assistant toute seule.", v: "Version" },
+    de: { lead: "Die kostenlose App für Wandtablets. Sie hält Ihr Dashboard auf dem Bildschirm, wacht auf, wenn Sie näher kommen, und aktualisiert sich über Home Assistant.", get: "App herunterladen", s1: "Öffnen Sie diese Seite auf dem Android- oder Fire-Tablet.", s2: "Tippen Sie auf Herunterladen und öffnen Sie dann die Datei.", s3: "Wenn Android fragt, erlauben Sie Installationen aus diesem Browser und tippen Sie auf Installieren.", s4: "Öffnen Sie die App. Sie findet Ihr Home Assistant von selbst.", v: "Version" },
+    es: { lead: "La app gratuita para tabletas de pared. Mantiene su panel en pantalla, se despierta cuando usted se acerca y se actualiza desde Home Assistant.", get: "Descargar la app", s1: "Abra esta página en la tableta Android o Fire.", s2: "Toque Descargar y luego abra el archivo.", s3: "Si Android lo pide, permita instalar desde este navegador y toque Instalar.", s4: "Abra la app. Encuentra su Home Assistant por sí sola.", v: "Versión" }
+  };
+  var lang = (navigator.language || "en").slice(0, 2);
+  var w = words[lang] || {};
+  if (words[lang]) document.documentElement.lang = lang;
+  document.querySelectorAll("[data-t]").forEach(function (el) { var k = el.getAttribute("data-t"); if (w[k]) el.textContent = w[k]; });
+  fetch("wall.json", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (j) {
+    document.getElementById("get").href = j.apk;
+    document.getElementById("ver").textContent = (w.v || "Version") + " " + j.version;
+  }).catch(function () {});
+</script>
+</body>
+</html>
