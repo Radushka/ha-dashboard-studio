@@ -10,7 +10,9 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
-from .const import DOMAIN, PRO
+from .assistant import conversation_agents
+from .const import DOMAIN, DRAFT, PRO
+from .draft import DraftStore
 from .layout import LayoutStore
 from .license import LicenseProblem, ProManager
 from .photos import ws_photos
@@ -40,6 +42,10 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_restart)
     websocket_api.async_register_command(hass, ws_saver_show)
     websocket_api.async_register_command(hass, ws_saver_subscribe)
+    websocket_api.async_register_command(hass, ws_draft_get)
+    websocket_api.async_register_command(hass, ws_draft_save)
+    websocket_api.async_register_command(hass, ws_draft_subscribe)
+    websocket_api.async_register_command(hass, ws_agents)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "hadash/layout"})
@@ -63,6 +69,9 @@ async def ws_publish(hass: HomeAssistant, connection: websocket_api.ActiveConnec
         return
     store: LayoutStore = hass.data[DOMAIN]
     data = await store.async_publish(layout, connection.user.name if connection.user else None)
+    # The draft is live now; an assistant works on the published layout until the studio changes it again.
+    drafts: DraftStore = hass.data[DRAFT]
+    drafts.clear()
     connection.send_result(msg["id"], {"revision": data["revision"], "published_at": data["published_at"]})
 
 
@@ -156,3 +165,59 @@ def ws_saver_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConn
 
     connection.subscriptions[msg["id"]] = hass.bus.async_listen(SAVER_EVENT, forward)
     connection.send_result(msg["id"])
+
+
+# Build a screen by talking (assistant.py): the studio shares its draft, and gets the assistant's changes at once.
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "hadash/draft"})
+@callback
+def ws_draft_get(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """The draft kept in Home Assistant: {project, base, change, by, note, updated}. Fields are null when empty."""
+    drafts: DraftStore = hass.data[DRAFT]
+    connection.send_result(msg["id"], drafts.public())
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "hadash/draft/save",
+        vol.Required("project"): dict,
+        vol.Required("base"): int,
+        vol.Required("seen"): int,
+    }
+)
+@callback
+def ws_draft_save(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """The studio's draft, a moment after each change. Refused (saved: false) when the assistant changed it
+    since the studio last looked; the studio then takes the assistant's version first."""
+    if len(str(msg["project"])) > MAX_LAYOUT:
+        connection.send_error(msg["id"], "too_large", "The layout is too large to save.")
+        return
+    drafts: DraftStore = hass.data[DRAFT]
+    saved = drafts.save_from_studio(msg["project"], msg["base"], msg["seen"])
+    connection.send_result(msg["id"], {"saved": saved, "change": drafts.change})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "hadash/draft/subscribe"})
+@callback
+def ws_draft_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Sends each change the assistant makes, as it makes it."""
+    drafts: DraftStore = hass.data[DRAFT]
+
+    @callback
+    def forward(data: dict[str, Any]) -> None:
+        connection.send_message(websocket_api.event_message(msg["id"], data))
+
+    connection.subscriptions[msg["id"]] = drafts.async_listen(forward)
+    connection.send_result(msg["id"])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "hadash/assistant/agents"})
+@callback
+def ws_agents(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """The AI agents set up in Home Assistant for the Ask box; "ready" ones may use Dashboard Studio."""
+    connection.send_result(msg["id"], {"agents": conversation_agents(hass)})

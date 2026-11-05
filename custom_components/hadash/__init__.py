@@ -6,32 +6,35 @@ The layout lives in Home Assistant's own storage, so it is part of every HA back
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from homeassistant.components import frontend
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
-from .const import DOMAIN, PANEL, PRO, URL_BASE, VERSION
+from .assistant import async_register as async_register_assistant
+from .const import DOMAIN, DRAFT, PANEL, PRO, URL_BASE, VERSION, WWW
+from .draft import DraftStore
 from .layout import LayoutStore
 from .license import ProManager
 from .photos import PhotoView
 from .websocket import async_register_commands
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
-WWW = Path(__file__).parent / "www"
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Register the files and the websocket commands once, when Home Assistant starts."""
     hass.data[DOMAIN] = LayoutStore(hass)
     await hass.data[DOMAIN].async_load()
+    hass.data[DRAFT] = DraftStore(hass)
+    await hass.data[DRAFT].async_load()
     hass.data[PRO] = ProManager(hass)
     await hass.data[PRO].async_load()
     hass.data[PRO].async_start()
     async_register_commands(hass)
+    # Build a screen by talking: the studio's tools for Home Assistant's AI assistants.
+    async_register_assistant(hass)
     hass.http.register_view(PhotoView())
     # No cache headers: index.html must always be fresh. The asset files have a hash in their names.
     await hass.http.async_register_static_paths([StaticPathConfig(URL_BASE, str(WWW), False)])
