@@ -69,6 +69,9 @@ LOOKS = {
     "neon": ("tubes", "words"),
     "pearl": ("pearl",),
 }
+# Theme values that make up a look (the same list as LOOK_THEME_KEYS in renderer/src/lib/screens.ts).
+LOOK_THEME_KEYS = ("style", "font", "clockFont", "icons", "accent", "wallpaper", "wallpaperDim", "wallpaperImage",
+                   "glass", "menuPanel", "look", "lookOption")
 COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 PROMPT = """You can design the user's wall tablet dashboards in Dashboard Studio.
@@ -121,11 +124,13 @@ Side menu: layout.menu is a list of {type, entity, label, name}. type is climate
 weather (entity, a weather.* entity), status, shades, family, scenes or voice. menuSide: "left" or "right".
 Header: headerEntity (usually an outdoor temperature) and header {hidden, align "split"|"left"|"center"}.
 
-Look of the whole house (only in the main layout, screen ""): theme.look and theme.lookOption.
+House look (in the main layout, screen ""): theme.look and theme.lookOption.
 Looks: aurora (Glass: classic, northern, sunset, slate), monochrome (black, graphite), paper (ivory, white),
 midnight (amber, red), bold (bright, soft), pill (dark), panel (classic),
 lucky8 (Lucky 8, red lacquer and gold: gold, words), neon (tubes, words), pearl (pearl). In the words option lights show as glowing names, not tiles. theme.accent is the accent color.
-Screens share the look of the main layout; their own theme can only change sizes such as textScale.
+Every screen wears the house look, unless it has its own look (own_look in dashboard_overview). To give one
+screen its own look (for example a child's room), or to put it back on the house look, use
+dashboard_set_screen_look. A screen's own theme can always change sizes such as textScale.
 
 Screens: the main layout (screen "") is for every tablet without its own layout. dashboard_add_screen makes a
 tablet its own layout; that tablet then opens /hadash/index.html?screen=<id>."""
@@ -248,7 +253,10 @@ def overview(hass: HomeAssistant) -> dict[str, Any]:
         "unpublished_changes": drafts.project_for(revision) is not None,
         "screens": [{"screen": "", "name": "Main layout (every other tablet)", **describe(project)}]
         + [
-            {"screen": s.get("id"), "name": s.get("name"), "device": s.get("device"), **describe(s.get("layout") or {})}
+            {"screen": s.get("id"), "name": s.get("name"), "device": s.get("device"), **describe(s.get("layout") or {}),
+             **({"own_look": {"look": ((s.get("layout") or {}).get("theme") or {}).get("look", "aurora"),
+                              "option": ((s.get("layout") or {}).get("theme") or {}).get("lookOption")}}
+                if s.get("ownLook") else {})}
             for s in project.get("screens") or []
         ],
     }
@@ -261,7 +269,7 @@ def _int(v: Any) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
 
-def check_layout(hass: HomeAssistant, layout: Any, main: bool) -> tuple[list[str], list[str]]:
+def check_layout(hass: HomeAssistant, layout: Any, main: bool, own_look: bool = False) -> tuple[list[str], list[str]]:
     """Problems that block the save, and warnings that do not. Written for the assistant to act on."""
     errors: list[str] = []
     warnings: list[str] = []
@@ -353,7 +361,7 @@ def check_layout(hass: HomeAssistant, layout: Any, main: bool) -> tuple[list[str
     if not isinstance(theme, dict):
         errors.append("theme must be a JSON object.")
         theme = {}
-    if main and "look" in theme:
+    if (main or own_look) and "look" in theme:
         look, option = theme.get("look"), theme.get("lookOption")
         if look not in LOOKS:
             errors.append(f"theme.look must be one of: {', '.join(LOOKS)}.")
@@ -394,14 +402,15 @@ def save_screen(hass: HomeAssistant, screen: str, layout: dict[str, Any], summar
     project, revision = working_project(hass)
     target = screen_of(project, screen)
     main = not screen
+    own = any(s.get("id") == screen and s.get("ownLook") for s in project.get("screens") or []) if screen else False
     layout = copy.deepcopy(layout)
     if main:
         # The main layout keeps its screens. They are changed one by one, with their own screen id.
         layout.pop("screens", None)
-    errors, warnings = check_layout(hass, layout, main)
+    errors, warnings = check_layout(hass, layout, main, own)
     # Problems that were in the layout already (a device the person removed from HA, say) do not block the
     # assistant's change; they come back as warnings. Card numbers are left out, since cards may move.
-    before, _ = check_layout(hass, target, main)
+    before, _ = check_layout(hass, target, main, own)
     known = {_unnumbered(e) for e in before}
     warnings += [f"Already in the layout before: {e}" for e in errors if _unnumbered(e) in known]
     errors = [e for e in errors if _unnumbered(e) not in known]
@@ -437,6 +446,43 @@ def add_screen(hass: HomeAssistant, name: str, width: int, height: int, copy_fro
     screens.append({"id": sid, "name": name, "device": {"name": name, "w": width, "h": height, "lite": width <= 1280}, "layout": source})
     hass.data[DRAFT].save_from_assistant(project, revision, f"Added the screen {name}.")
     return {"screen": sid, "address": f"/hadash/index.html?screen={sid}"}
+
+
+def set_screen_look(hass: HomeAssistant, screen: str, look: str, option: str | None) -> dict[str, Any]:
+    """Gives one screen its own look, or ("house") puts it back on the house look. Screen "" sets the house look."""
+    _pro_or_raise(hass)
+    project, revision = working_project(hass)
+    layout = screen_of(project, screen)
+    entry = next((s for s in project.get("screens") or [] if s.get("id") == screen), None)
+    if look == "house":
+        if entry is None:
+            raise AssistantProblem('The main layout is the house look. Name a look to change it.')
+        entry.pop("ownLook", None)
+        theme = layout.setdefault("theme", {})
+        house = project.get("theme") or {}
+        for k in LOOK_THEME_KEYS:
+            if k in house:
+                theme[k] = copy.deepcopy(house[k])
+            else:
+                theme.pop(k, None)
+        summary = f"{entry.get('name')} wears the house look again."
+    else:
+        if look not in LOOKS:
+            raise AssistantProblem(f"look must be house or one of: {', '.join(LOOKS)}.")
+        if option is not None and option not in LOOKS[look]:
+            raise AssistantProblem(f"option for {look} must be one of: {', '.join(LOOKS[look])}.")
+        theme = layout.setdefault("theme", {})
+        # The studio puts on every value of the look (wallpaper, fonts, glass) when it sees the new name.
+        for k in LOOK_THEME_KEYS:
+            theme.pop(k, None)
+        theme["look"] = look
+        if option is not None:
+            theme["lookOption"] = option
+        if entry is not None:
+            entry["ownLook"] = True
+        summary = f"{entry.get('name') if entry else 'The house'} now wears the look {look}."
+    hass.data[DRAFT].save_from_assistant(project, revision, summary)
+    return {"saved": True, "next": "The studio preview shows it now. The tablets change only after Publish."}
 
 
 # ---------- The LLM API ----------
@@ -554,6 +600,22 @@ class AddScreenTool(_Tool):
         return add_screen(hass, args["name"], args.get("width", 1280), args.get("height", 800), args.get("copy_from"))
 
 
+class SetScreenLookTool(_Tool):
+    name = "dashboard_set_screen_look"
+    description = (
+        'Set the look of one screen. screen "" sets the house look, which every screen without its own look wears. '
+        'For another screen, a look name gives that screen its own look (for example a child\'s room), and look '
+        '"house" puts it back on the house look. option is one of the look\'s options.'
+    )
+    read_only = False
+    parameters = vol.Schema(
+        {vol.Optional("screen", default=""): str, vol.Required("look"): str, vol.Optional("option"): str}
+    )
+
+    def run(self, hass, args):
+        return set_screen_look(hass, args.get("screen", ""), args["look"], args.get("option"))
+
+
 class DashboardStudioAPI(llm.API):
     """The tools, offered to every assistant the person allows to use "Dashboard Studio"."""
 
@@ -563,7 +625,8 @@ class DashboardStudioAPI(llm.API):
         self.requires_admin = True
 
     async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
-        tools = [OverviewTool(), CardTypesTool(), FindDevicesTool(), GetScreenTool(), SaveScreenTool(), AddScreenTool()]
+        tools = [OverviewTool(), CardTypesTool(), FindDevicesTool(), GetScreenTool(), SaveScreenTool(), AddScreenTool(),
+                 SetScreenLookTool()]
         return llm.APIInstance(api=self, api_prompt=PROMPT, llm_context=llm_context, tools=tools)
 
 

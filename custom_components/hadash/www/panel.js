@@ -6,7 +6,8 @@ class HadashStudioPanel extends HTMLElement {
     const root = this.attachShadow({ mode: "open" });
     root.innerHTML = `<style>:host{display:block;height:100vh;height:100dvh;background:#1c1c1e}iframe{display:block;width:100%;height:100%;border:0}</style>`;
     this.frame = document.createElement("iframe");
-    this.frame.title = "Dashboard Studio";
+    // A name for screen readers. Not a title: Safari shows an iframe's title as a tooltip over everything inside it.
+    this.frame.setAttribute("aria-label", "Dashboard Studio");
     this.frame.allow = "clipboard-write; fullscreen";
     this.frame.src = "/hadash/studio.html?panel";
     this.frame.addEventListener("load", () => this.tell());
