@@ -65,6 +65,9 @@ LOOKS = {
     "bold": ("bright", "soft"),
     "pill": ("dark",),
     "panel": ("classic",),
+    "lucky8": ("gold", "words"),
+    "neon": ("tubes", "words"),
+    "pearl": ("pearl",),
 }
 COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 
@@ -120,7 +123,8 @@ Header: headerEntity (usually an outdoor temperature) and header {hidden, align 
 
 Look of the whole house (only in the main layout, screen ""): theme.look and theme.lookOption.
 Looks: aurora (Glass: classic, northern, sunset, slate), monochrome (black, graphite), paper (ivory, white),
-midnight (amber, red), bold (bright, soft), pill (dark), panel (classic). theme.accent is the accent color.
+midnight (amber, red), bold (bright, soft), pill (dark), panel (classic),
+lucky8 (Lucky 8, red lacquer and gold: gold, words), neon (tubes, words), pearl (pearl). In the words option lights show as glowing names, not tiles. theme.accent is the accent color.
 Screens share the look of the main layout; their own theme can only change sizes such as textScale.
 
 Screens: the main layout (screen "") is for every tablet without its own layout. dashboard_add_screen makes a
