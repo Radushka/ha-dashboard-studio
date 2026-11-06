@@ -9,7 +9,10 @@ class HadashStudioPanel extends HTMLElement {
     // A name for screen readers. Not a title: Safari shows an iframe's title as a tooltip over everything inside it.
     this.frame.setAttribute("aria-label", "Dashboard Studio");
     this.frame.allow = "clipboard-write; fullscreen";
-    this.frame.src = "/hadash/studio.html?panel";
+    // The integration's version (HA loads this file as panel.js?v=<version>) makes each update's studio page a new address,
+    // so a browser never shows an old, cached studio.html whose files the update removed.
+    const v = new URL(import.meta.url).searchParams.get("v");
+    this.frame.src = "/hadash/studio.html?panel" + (v ? "&v=" + encodeURIComponent(v) : "");
     this.frame.addEventListener("load", () => this.tell());
     root.appendChild(this.frame);
   }

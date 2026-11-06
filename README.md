@@ -1,6 +1,6 @@
 # Dashboard Studio for Home Assistant
 
-Beautiful dashboards for Home Assistant wall tablets: a glass look, large calm type, and rooms first. This integration serves the dashboard to your tablets and keeps your layout. Design it in the web studio inside Home Assistant, or in the [Dashboard Studio Mac app](https://lukaps.com/dashboardstudio/).
+Beautiful dashboards for Home Assistant wall tablets: a glass look, large calm type, and rooms first. This integration serves the dashboard to your tablets and keeps your layout. Design it in the studio inside Home Assistant, in any browser. More at [lukaps.com/dashboardstudio](https://lukaps.com/dashboardstudio/)
 
 ![Dashboard Studio: beautiful Home Assistant wall tablets, shown with a dashboard of rooms, weather and a camera](https://raw.githubusercontent.com/Radushka/ha-dashboard-studio/main/images/dashboard.jpg)
 
