@@ -33,3 +33,7 @@ VERSION: str = _json.loads((_Path(__file__).parent / "manifest.json").read_text(
 
 # The built tablet and studio files.
 WWW = _Path(__file__).parent / "www"
+
+# Auto-update: the switch, and what the last night's look found (autoupdate.py).
+AUTO = "hadash_auto_update"
+AUTO_STORAGE_KEY = "hadash.auto_update"

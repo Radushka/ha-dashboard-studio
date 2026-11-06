@@ -155,3 +155,50 @@ async def _after_connect(
     return {"name": name, "model": model, "tv": tv, "url": url, "kept": before is not None}
 
 
+
+
+async def update_app(
+    host: str,
+    signer: Any,
+    app: dict[str, Any],
+    device_factory: Callable[[str], Any] | None = None,
+) -> dict[str, Any]:
+    """Updates the wall app on a TV that was set up before, over adb: no "Install?" box on the TV.
+
+    The TV already trusts Home Assistant's key, so nobody has to press anything. When the TV asks again (its
+    "Allow USB debugging?" was answered without "Always allow"), this gives up at once: nobody is there to answer.
+    The app is opened again afterwards (an update closes it), on the screen it had.
+    Returns {"version", "updated"}; raises SetupError (unreachable, declined, old_app, failed)."""
+    from adb_shell.adb_device_async import AdbDeviceTcpAsync
+    from adb_shell.exceptions import AdbTimeoutError, DeviceAuthError, TcpTimeoutException
+
+    device = device_factory(host) if device_factory else AdbDeviceTcpAsync(host, ADB_PORT, default_transport_timeout_s=8.0)
+    try:
+        await device.connect(rsa_keys=[signer], auth_timeout_s=5.0, auth_callback=lambda _d: None)
+    except (OSError, TcpTimeoutException) as err:
+        raise SetupError("unreachable", str(err)) from err
+    except (AdbTimeoutError, DeviceAuthError) as err:
+        raise SetupError("declined", str(err)) from err
+    try:
+        async def sh(cmd: str, timeout: float = 30.0) -> str:
+            out = await device.shell(cmd, read_timeout_s=timeout, timeout_s=timeout)
+            return out if isinstance(out, str) else str(out or "")
+
+        before = installed_code(await sh(f"dumpsys package {PACKAGE} | grep versionCode"))
+        if before is not None and before >= app["code"]:
+            return {"version": app["version"], "updated": False}
+        await device.push(str(app["path"]), TMP_APK, read_timeout_s=60.0)
+        result = await sh(f"pm install -r {TMP_APK}", timeout=120.0)
+        await sh(f"rm -f {TMP_APK}")
+        problem = install_problem(result)
+        if problem:
+            raise SetupError(problem, result.strip()[-300:])
+        # The same rights as after the setup (an update keeps them, but this costs nothing), then back on screen.
+        await sh(f"appops set {PACKAGE} SYSTEM_ALERT_WINDOW allow")
+        await sh(f"am start -n {ACTIVITY}")
+        return {"version": app["version"], "updated": True}
+    finally:
+        try:
+            await device.close()
+        except Exception:  # noqa: BLE001
+            pass

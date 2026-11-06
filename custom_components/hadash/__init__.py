@@ -13,7 +13,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
 from .assistant import async_register as async_register_assistant
-from .const import DOMAIN, DRAFT, PANEL, PHOTO_VIEW, PRO, SPOTS, TVS, URL_BASE, VERSION, WWW
+from .autoupdate import AutoUpdater
+from .const import AUTO, DOMAIN, DRAFT, PANEL, PHOTO_VIEW, PRO, SPOTS, TVS, URL_BASE, VERSION, WWW
 from .draft import DraftStore
 from .firetv import TvStore
 from .layout import LayoutStore
@@ -38,6 +39,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     await hass.data[PRO].async_load()
     hass.data[PRO].async_start()
     async_register_commands(hass)
+    # Auto-update (off until turned on in the studio): a quiet look once a night.
+    hass.data[AUTO] = AutoUpdater(hass)
+    await hass.data[AUTO].async_load()
+    hass.data[AUTO].async_start()
     # Build a screen by talking: the studio's tools for Home Assistant's AI assistants.
     async_register_assistant(hass)
     # Screensaver photos: small copies for the tablets, and where the clock may go on each (off faces).

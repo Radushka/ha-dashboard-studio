@@ -298,6 +298,21 @@ async def run_setup(
     return result
 
 
+async def update_tv_app(hass: HomeAssistant, host: str, device_factory: Callable[[str], Any] | None = None) -> dict[str, Any]:
+    """Installs the wall app Home Assistant serves on one TV set up from the studio, over adb (no "Install?" box)."""
+    saved: TvStore = hass.data[TVS]
+    if host not in saved.tvs:
+        raise SetupError("unknown")
+    app = wall_app()
+    if app is None:
+        raise SetupError("no_app")
+    signer = await _signer(hass)
+    result = await tvsetup.update_app(host, signer, app, device_factory)
+    await saved.async_save_tv(host, {**saved.tvs[host], "version": app["version"]})
+    _LOGGER.info("Wall app on %s updated over adb to %s (installed: %s)", host, app["version"], result["updated"])
+    return result
+
+
 # ---- Websocket commands ----
 
 
@@ -367,3 +382,29 @@ async def ws_tv_forget(hass: HomeAssistant, connection: websocket_api.ActiveConn
     saved: TvStore = hass.data[TVS]
     await saved.async_remove(msg["host"])
     connection.send_result(msg["id"])
+
+
+# Not admin only: the wall app on a TV asks through its dashboard, which may be signed in as a tablet user.
+# It can only put the app Home Assistant serves (signed with our key) on a TV that an admin set up, and only
+# a newer one; one at a time.
+_UPDATING: set[str] = set()
+
+
+@websocket_api.websocket_command({vol.Required("type"): "hadash/tv/update_app", vol.Required("host"): str})
+@websocket_api.async_response
+async def ws_tv_update_app(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """The wall app on a TV has a new version ready: Home Assistant installs it over adb, with no box on the TV."""
+    host = msg["host"]
+    if host in _UPDATING:
+        connection.send_error(msg["id"], "busy", "An update of this TV is running")
+        return
+    _UPDATING.add(host)
+    try:
+        connection.send_result(msg["id"], await update_tv_app(hass, host))
+    except SetupError as err:
+        connection.send_error(msg["id"], err.code, err.detail or err.code)
+    except Exception as err:  # noqa: BLE001 - adb can fail in many ways; the TV then asks itself.
+        _LOGGER.warning("Wall app update over adb on %s failed: %s", host, err)
+        connection.send_error(msg["id"], "failed", str(err))
+    finally:
+        _UPDATING.discard(host)

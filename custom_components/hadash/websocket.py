@@ -13,11 +13,12 @@ from homeassistant.core import HomeAssistant, callback
 from .assistant import conversation_agents
 from .const import DOMAIN, DRAFT, PRO
 from .draft import DraftStore
-from .firetv import ws_tv_find, ws_tv_forget, ws_tv_setup
+from .firetv import ws_tv_find, ws_tv_forget, ws_tv_setup, ws_tv_update_app
 from .layout import LayoutStore
 from .license import LicenseProblem, ProManager
 from .photos import ws_photos
 from .spots import ws_photo_spot
+from .autoupdate import ws_auto
 from .updates import ws_install, ws_restart, ws_update
 
 # A layout is a few hundred kilobytes at most, even with many screens. This stops a mistake from filling the disk.
@@ -43,6 +44,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_update)
     websocket_api.async_register_command(hass, ws_install)
     websocket_api.async_register_command(hass, ws_restart)
+    websocket_api.async_register_command(hass, ws_auto)
     websocket_api.async_register_command(hass, ws_saver_show)
     websocket_api.async_register_command(hass, ws_saver_subscribe)
     websocket_api.async_register_command(hass, ws_draft_get)
@@ -52,6 +54,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_tv_find)
     websocket_api.async_register_command(hass, ws_tv_setup)
     websocket_api.async_register_command(hass, ws_tv_forget)
+    websocket_api.async_register_command(hass, ws_tv_update_app)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "hadash/layout"})
