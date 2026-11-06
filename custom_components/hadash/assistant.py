@@ -94,7 +94,9 @@ order hint, and w and h are the size. With grid.auto false, x and y place the ca
 grid.columns is usually 12. grid.rows is how many rows fill the screen height.
 
 Cards about one device ("entity" is required, of the kinds given):
-- light: one light (light). climate: a thermostat dial (climate). media: a player (media_player).
+- light: one light (light). climate: a thermostat dial (climate). media: a player (media_player);
+  music: "record" (a turntable), "sleeve" (the record slides out of its cover) or "notes" (big song title);
+  without it, the classic player card.
 - camera: a camera (camera); live: "tap" | "always" | "never".
 - graph: a sensor history line (sensor); hours: 24. gauge: a ring (sensor); min, max,
   levels: {warn, alert, high}.

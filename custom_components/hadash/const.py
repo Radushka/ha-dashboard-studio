@@ -15,6 +15,10 @@ LICENSE_STORAGE_KEY = "hadash.license"
 DRAFT_STORAGE_KEY = "hadash.draft"
 DRAFT = "hadash_draft"
 PRO = "hadash_pro"
+# The screensaver: the photo view (its small copies) and where the clock may go on each photo (spots.py).
+PHOTO_VIEW = "hadash_photo_view"
+SPOTS = "hadash_spots"
+SPOTS_STORAGE_KEY = "hadash.photo_spots"
 
 # The integration's version, from its manifest. It is read once, when the module is imported.
 import json as _json

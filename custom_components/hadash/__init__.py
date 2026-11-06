@@ -13,11 +13,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
 from .assistant import async_register as async_register_assistant
-from .const import DOMAIN, DRAFT, PANEL, PRO, URL_BASE, VERSION, WWW
+from .const import DOMAIN, DRAFT, PANEL, PHOTO_VIEW, PRO, SPOTS, URL_BASE, VERSION, WWW
 from .draft import DraftStore
 from .layout import LayoutStore
 from .license import ProManager
 from .photos import PhotoView
+from .spots import SpotStore
 from .websocket import async_register_commands
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -35,7 +36,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async_register_commands(hass)
     # Build a screen by talking: the studio's tools for Home Assistant's AI assistants.
     async_register_assistant(hass)
-    hass.http.register_view(PhotoView())
+    # Screensaver photos: small copies for the tablets, and where the clock may go on each (off faces).
+    hass.data[SPOTS] = SpotStore(hass)
+    await hass.data[SPOTS].async_load()
+    hass.data[PHOTO_VIEW] = PhotoView()
+    hass.http.register_view(hass.data[PHOTO_VIEW])
     # No cache headers: index.html must always be fresh. The asset files have a hash in their names.
     await hass.http.async_register_static_paths([StaticPathConfig(URL_BASE, str(WWW), False)])
     return True

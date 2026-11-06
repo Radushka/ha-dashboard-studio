@@ -16,6 +16,7 @@ from .draft import DraftStore
 from .layout import LayoutStore
 from .license import LicenseProblem, ProManager
 from .photos import ws_photos
+from .spots import ws_photo_spot
 from .updates import ws_install, ws_restart, ws_update
 
 # A layout is a few hundred kilobytes at most, even with many screens. This stops a mistake from filling the disk.
@@ -37,6 +38,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_pro_activate)
     websocket_api.async_register_command(hass, ws_pro_remove)
     websocket_api.async_register_command(hass, ws_photos)
+    websocket_api.async_register_command(hass, ws_photo_spot)
     websocket_api.async_register_command(hass, ws_update)
     websocket_api.async_register_command(hass, ws_install)
     websocket_api.async_register_command(hass, ws_restart)

@@ -26,7 +26,11 @@ from homeassistant.components.http.auth import async_sign_path
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .const import SPOTS
+from .photo_info import PhotoInfo
+
 _LOGGER = logging.getLogger(__name__)
+INFO_KEY = "hadash_photo_info"
 
 PHOTO_URL = "/api/hadash/photo"
 # How long a photo address from the list keeps working. The tablet asks for a new list every hour.
@@ -219,6 +223,23 @@ class PhotoView(HomeAssistantView):
     def __init__(self) -> None:
         self._cache: OrderedDict[tuple[str, int, int], bytes] = OrderedDict()
 
+    async def async_copy(self, hass: HomeAssistant, media_id: str, width: int, height: int) -> bytes:
+        """The copy at the screen's size, from memory when it was made a moment ago."""
+        key = (media_id, width, height)
+        body = self._cache.get(key)
+        if body is None:
+            body = await _photo(hass, media_id, width, height)
+            self._cache[key] = body
+            while len(self._cache) > CACHE_SIZE:
+                self._cache.popitem(last=False)
+        else:
+            self._cache.move_to_end(key)
+        # Where the clock may go is worked out once per photo, right away, so it is ready when the photo shows.
+        spots = hass.data.get(SPOTS)
+        if spots is not None:
+            spots.async_prepare(media_id, body)
+        return body
+
     async def get(self, request: web.Request) -> web.Response:
         hass: HomeAssistant = request.app["hass"]
         media_id = request.query.get("id", "")
@@ -229,19 +250,11 @@ class PhotoView(HomeAssistantView):
             return web.Response(status=400)
         if not media_id.startswith("media-source://"):
             return web.Response(status=400)
-        key = (media_id, width, height)
-        body = self._cache.get(key)
-        if body is None:
-            try:
-                body = await _photo(hass, media_id, width, height)
-            except Exception as err:  # noqa: BLE001 - the tablet skips a photo it cannot load
-                _LOGGER.debug("Photo %s failed: %s", media_id, err)
-                return web.Response(status=404)
-            self._cache[key] = body
-            while len(self._cache) > CACHE_SIZE:
-                self._cache.popitem(last=False)
-        else:
-            self._cache.move_to_end(key)
+        try:
+            body = await self.async_copy(hass, media_id, width, height)
+        except Exception as err:  # noqa: BLE001 - the tablet skips a photo it cannot load
+            _LOGGER.debug("Photo %s failed: %s", media_id, err)
+            return web.Response(status=404)
         return web.Response(body=body, content_type="image/jpeg", headers={"Cache-Control": "private, max-age=21600"})
 
 
@@ -261,6 +274,12 @@ async def ws_photos(hass: HomeAssistant, connection: websocket_api.ActiveConnect
     except Exception as err:  # noqa: BLE001 - a folder that is gone or a source that is offline
         connection.send_error(msg["id"], "not_found", f"Could not open the folder: {err}")
         return
+    # When and where each photo was taken, for "On this day" and the place and date line.
+    info = hass.data.setdefault(INFO_KEY, PhotoInfo())
+    try:
+        await info.add_facts(hass, photos)
+    except Exception as err:  # noqa: BLE001 - the photos still show without their line
+        _LOGGER.debug("Photo facts failed: %s", err)
     size = f"&w={msg['width']}&h={msg['height']}"
     for p in photos:
         p["url"] = async_sign_path(hass, f"{PHOTO_URL}?id={quote(p.pop('id'), safe='')}{size}", SIGN_FOR)
