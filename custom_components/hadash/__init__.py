@@ -13,8 +13,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
 from .assistant import async_register as async_register_assistant
-from .const import DOMAIN, DRAFT, PANEL, PHOTO_VIEW, PRO, SPOTS, URL_BASE, VERSION, WWW
+from .const import DOMAIN, DRAFT, PANEL, PHOTO_VIEW, PRO, SPOTS, TVS, URL_BASE, VERSION, WWW
 from .draft import DraftStore
+from .firetv import TvStore
 from .layout import LayoutStore
 from .license import ProManager
 from .photos import PhotoView
@@ -41,6 +42,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     await hass.data[SPOTS].async_load()
     hass.data[PHOTO_VIEW] = PhotoView()
     hass.http.register_view(hass.data[PHOTO_VIEW])
+    # Home on TV: the Fire TVs set up from the studio.
+    hass.data[TVS] = TvStore(hass)
+    await hass.data[TVS].async_load()
     # No cache headers: index.html must always be fresh. The asset files have a hash in their names.
     await hass.http.async_register_static_paths([StaticPathConfig(URL_BASE, str(WWW), False)])
     return True

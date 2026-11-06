@@ -3,12 +3,12 @@
   "name": "Dashboard Studio",
   "codeowners": ["@Radushka"],
   "config_flow": true,
-  "dependencies": ["http", "frontend", "websocket_api", "media_source"],
+  "dependencies": ["http", "frontend", "websocket_api", "media_source", "network"],
   "documentation": "https://lukaps.com/dashboardstudio/support/",
   "integration_type": "service",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/Radushka/ha-dashboard-studio/issues",
-  "requirements": [],
+  "requirements": ["adb-shell[async]==0.4.4"],
   "single_config_entry": true,
-  "version": "1.4.31"
+  "version": "1.4.32"
 }

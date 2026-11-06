@@ -40,6 +40,10 @@ If you update from 2026.10 to 2026.11, you do not need to do anything. Home Assi
 
 Tablets pick up a new layout by themselves.
 
+## Home on TV (beta)
+
+On a Fire TV, the dashboard can come up when the TV rests. Turn on ADB debugging on the TV (Settings > My Fire TV > Developer options), then choose **Add a Fire TV** in the studio's ⋯ menu. Home Assistant installs the free Dashboard Studio Wall app and sets it up. The TV asks once to allow it. Works on Fire TV Stick 4K Max, Fire TV Cube and TVs with Fire TV built in, not on the Vega OS models.
+
 ## Requirements
 
 Home Assistant 2026.10 or later.
@@ -47,5 +51,7 @@ Home Assistant 2026.10 or later.
 ## Help
 
 [Support page](https://lukaps.com/dashboardstudio/support/) or support@lukaps.com. To report a bug, open an [issue](https://github.com/Radushka/ha-dashboard-studio/issues).
+
+Amazon, Fire and Fire TV are trademarks of Amazon.com, Inc. or its affiliates. Home Assistant is a trademark of the Open Home Foundation. Dashboard Studio is an independent product and is not affiliated with or endorsed by Amazon or the Home Assistant project.
 
 © 2026 ARB Consulting Inc.

@@ -13,6 +13,7 @@ from homeassistant.core import HomeAssistant, callback
 from .assistant import conversation_agents
 from .const import DOMAIN, DRAFT, PRO
 from .draft import DraftStore
+from .firetv import ws_tv_find, ws_tv_forget, ws_tv_setup
 from .layout import LayoutStore
 from .license import LicenseProblem, ProManager
 from .photos import ws_photos
@@ -48,6 +49,9 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_draft_save)
     websocket_api.async_register_command(hass, ws_draft_subscribe)
     websocket_api.async_register_command(hass, ws_agents)
+    websocket_api.async_register_command(hass, ws_tv_find)
+    websocket_api.async_register_command(hass, ws_tv_setup)
+    websocket_api.async_register_command(hass, ws_tv_forget)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "hadash/layout"})
