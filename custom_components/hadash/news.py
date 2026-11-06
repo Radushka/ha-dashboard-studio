@@ -422,6 +422,19 @@ def guesses(url: str) -> list[str]:
     return out
 
 
+async def read_up_to(stream: Any, limit: int) -> bytes:
+    """The whole answer, up to limit bytes. A stream's read(n) gives only what has arrived so far, which cut big feeds
+    (Global News, Ottawa Citizen) in the middle, so they looked like broken XML: "This address is not a feed"."""
+    parts: list[bytes] = []
+    size = 0
+    async for chunk in stream.iter_chunked(64 * 1024):
+        parts.append(chunk)
+        size += len(chunk)
+        if size >= limit:
+            break
+    return b"".join(parts)[:limit]
+
+
 def closed_site(url: str) -> bool:
     host = urlparse(url).netloc.lower().removeprefix("www.").removeprefix("m.")
     return any(host == c or host.endswith(f".{c}") for c in CLOSED)
@@ -470,7 +483,7 @@ class NewsStore:
             async with session.get(url, headers=HEADERS, timeout=ClientTimeout(total=wait), allow_redirects=True) as resp:
                 if resp.status >= 400:
                     raise NewsError("not_reachable", f"The site answered {resp.status}.")
-                body = await resp.content.read(limit)
+                body = await read_up_to(resp.content, limit)
                 return body, resp.headers.get("Content-Type", "").lower(), str(resp.url)
         except (TimeoutError, asyncio.TimeoutError) as err:
             raise NewsError("not_reachable", "The site did not answer in time.") from err
