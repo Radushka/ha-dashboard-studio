@@ -1,7 +1,7 @@
 {
   "domain": "hadash",
   "name": "Dashboard Studio",
-  "after_dependencies": ["zeroconf"],
+  "after_dependencies": ["conversation", "zeroconf"],
   "codeowners": ["@Radushka"],
   "config_flow": true,
   "dependencies": ["http", "frontend", "websocket_api", "media_source", "network"],
@@ -11,5 +11,5 @@
   "issue_tracker": "https://github.com/Radushka/ha-dashboard-studio/issues",
   "requirements": ["adb-shell[async]>=0.4.4"],
   "single_config_entry": true,
-  "version": "1.4.39"
+  "version": "1.4.40"
 }

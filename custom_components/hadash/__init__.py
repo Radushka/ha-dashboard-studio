@@ -22,6 +22,7 @@ from .pages import FreshPageView
 from .license import ProManager
 from .photos import PhotoView
 from .spots import SpotStore
+from .voice import async_register as async_register_voice
 from .websocket import async_register_commands
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -49,6 +50,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     await hass.data[TVS].async_load()
     # News cards: feeds read here, with small copies of their pictures.
     async_register_news(hass)
+    # Talk to the wall: Assist sentences that name a wall screen ("show the front door on the kitchen tablet").
+    async_register_voice(hass)
     # The pages first, with "no-cache", so a browser never keeps an old studio.html after an update.
     hass.http.register_view(FreshPageView())
     # Everything else: the asset files have a hash in their names.
