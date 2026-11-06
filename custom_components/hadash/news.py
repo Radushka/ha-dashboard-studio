@@ -29,7 +29,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, urljoin, urlparse
 import xml.etree.ElementTree as ET
 
-from aiohttp import web
+from aiohttp import ClientTimeout, web
 import voluptuous as vol
 
 from homeassistant.components import websocket_api
@@ -55,6 +55,9 @@ IMAGE_CACHE = 80
 # Stories without a picture in the feed: the story's own page often names one (og:image). Only a few per read.
 PAGE_LOOKUPS = 8
 SUMMARY_CHARS = 320
+# Finding a feed from a link: each guess gets a short wait, and the whole search never takes longer than this.
+GUESS_WAIT = 8
+CHECK_WAIT = 25
 WIDTHS = (320, 480, 720, 960, 1280, 1600)
 HEADERS = {
     "User-Agent": f"DashboardStudio/{VERSION} (Home Assistant; +https://lukaps.com/dashboardstudio/)",
@@ -364,6 +367,27 @@ def find_feeds(page: str, base: str) -> list[str]:
     return found
 
 
+_A_TAG = re.compile(r"<a\b[^>]*>", re.I)
+_FEEDISH = re.compile(r"(rss|atom|/feeds?(/|$|\.|\?)|\.xml($|\?))", re.I)
+
+
+def feed_links(page: str, base: str) -> list[str]:
+    """Ordinary links on a page that look like feeds, on the same site: a site's "RSS feeds" page lists them this way
+    (cbc.ca/rss). Also the page's own "RSS" link, which can lead to that list."""
+    host = urlparse(base).netloc.lower().removeprefix("www.")
+    found: list[str] = []
+    for tag in _A_TAG.findall(page):
+        href = _attrs(tag).get("href", "")
+        if not href or href.startswith(("#", "mailto:", "javascript:")):
+            continue
+        url = urljoin(base, href).split("#")[0]
+        other = urlparse(url).netloc.lower().removeprefix("www.")
+        same = other == host or other.endswith(f".{host}") or host.endswith(f".{other}")
+        if same and _FEEDISH.search(urlparse(url).path + ("?" + urlparse(url).query if urlparse(url).query else "")) and url not in found and url.rstrip("/") != base.rstrip("/"):
+            found.append(url)
+    return found
+
+
 def og_image(page: str, base: str) -> str | None:
     """The picture a story's page shares with social sites."""
     for tag in re.findall(r"<meta\b[^>]*>", page, re.I):
@@ -439,11 +463,11 @@ class NewsStore:
         self._images: dict[str, str] = {}
         self._pages: OrderedDict[str, str | None] = OrderedDict()
 
-    async def _get(self, url: str, limit: int, accept_html: bool = True) -> tuple[bytes, str, str]:
+    async def _get(self, url: str, limit: int, wait: float = 15) -> tuple[bytes, str, str]:
         """(body, content type, final address)."""
         session = async_get_clientsession(self.hass)
         try:
-            async with session.get(url, headers=HEADERS, timeout=15, allow_redirects=True) as resp:
+            async with session.get(url, headers=HEADERS, timeout=ClientTimeout(total=wait), allow_redirects=True) as resp:
                 if resp.status >= 400:
                     raise NewsError("not_reachable", f"The site answered {resp.status}.")
                 body = await resp.content.read(limit)
@@ -467,13 +491,14 @@ class NewsStore:
         except LookupError:
             return body.decode("utf-8", "replace")
 
-    async def _read(self, url: str) -> dict[str, Any]:
-        body, ctype, final = await self._get(url, MAX_FEED_BYTES)
+    async def _read(self, url: str, pictures: bool = True, wait: float = 15) -> dict[str, Any]:
+        body, ctype, final = await self._get(url, MAX_FEED_BYTES, wait)
         try:
             data = await self.hass.async_add_executor_job(parse_feed, self._decode(body, ctype), final)
         except ValueError as err:
             raise NewsError("no_feed", "This address is not a feed.") from err
-        await self._add_pictures(data)
+        if pictures:
+            await self._add_pictures(data)
         return data
 
     async def _add_pictures(self, data: dict[str, Any]) -> None:
@@ -523,31 +548,50 @@ class NewsStore:
         return feed
 
     async def async_check(self, link: str) -> dict[str, Any]:
-        """Find the feed behind any link: a feed address, a web page, a channel or a profile."""
+        """Find the feed behind any link: a feed address, a web page, a channel or a profile. At most CHECK_WAIT seconds."""
         url = normalize(link)
         if closed_site(url):
             raise NewsError("closed", "This site has no open feed.")
-        tried: list[str] = []
+        try:
+            async with asyncio.timeout(CHECK_WAIT):
+                return await self._find(url)
+        except TimeoutError as err:
+            raise NewsError("not_reachable", "The site did not answer in time.") from err
+
+    async def _find(self, url: str) -> dict[str, Any]:
+        tried: set[str] = set()
         last: NewsError | None = None
 
         async def attempt(candidate: str) -> dict[str, Any] | None:
             nonlocal last
             if candidate in tried:
                 return None
-            tried.append(candidate)
+            tried.add(candidate)
             try:
-                feed = await self._read(candidate)
+                # No picture lookups here, so the studio hears back fast. The first real read adds them.
+                feed = await self._read(candidate, pictures=False, wait=GUESS_WAIT)
             except NewsError as err:
                 last = err
                 return None
+            return found(candidate, feed)
+
+        def found(address: str, feed: dict[str, Any]) -> dict[str, Any] | None:
             if not feed["items"]:
                 return None
-            self._feeds[candidate] = _Feed(candidate, feed, None, time.time(), time.time())
-            return {"url": candidate, "title": feed["title"], "kind": feed["kind"], "count": len(feed["items"]), "latest": feed["items"][0]["title"]}
+            # Kept for the card, but due for a full read (with pictures) as soon as a screen asks.
+            self._feeds[address] = _Feed(address, feed)
+            return {"url": address, "title": feed["title"], "kind": feed["kind"], "count": len(feed["items"]), "latest": feed["items"][0]["title"]}
 
-        for g in guesses(url)[:-6]:
-            if found := await attempt(g):
-                return found
+        async def first(candidates: list[str]) -> dict[str, Any] | None:
+            """Tries them all at once; the first in the list that works wins."""
+            for result in await asyncio.gather(*(attempt(c) for c in candidates)):
+                if result:
+                    return result
+            return None
+
+        everywhere = guesses(url)
+        if result := await first(everywhere[:-6]):
+            return result
         try:
             body, ctype, final = await self._get(url, MAX_FEED_BYTES)
         except NewsError as err:
@@ -557,17 +601,26 @@ class NewsStore:
             text = self._decode(body, ctype)
             try:
                 feed = await self.hass.async_add_executor_job(parse_feed, text, final)
-                if feed["items"]:
-                    await self._add_pictures(feed)
-                    self._feeds[final] = _Feed(final, feed, None, time.time(), time.time())
-                    return {"url": final, "title": feed["title"], "kind": feed["kind"], "count": len(feed["items"]), "latest": feed["items"][0]["title"]}
             except ValueError:
-                for candidate in find_feeds(text, final)[:4]:
-                    if found := await attempt(candidate):
-                        return found
-        for g in guesses(url)[-6:]:
-            if found := await attempt(g):
-                return found
+                if result := await first(find_feeds(text, final)[:4]):
+                    return result
+                # No <link> to a feed: ordinary links that look like feeds, such as a list of feeds or the footer's
+                # "RSS" link. One page further at most (cbc.ca/news, then cbc.ca/rss/, then its first feed).
+                links = feed_links(text, final)
+                if result := await first(links[:4]):
+                    return result
+                for page in links[:2]:
+                    try:
+                        body2, ctype2, final2 = await self._get(page, MAX_FEED_BYTES, GUESS_WAIT)
+                    except NewsError:
+                        continue
+                    if result := await first(feed_links(self._decode(body2, ctype2), final2)[:4]):
+                        return result
+            else:
+                if result := found(final, feed):
+                    return result
+        if result := await first(everywhere[-6:]):
+            return result
         if isinstance(last, NewsError) and last.code == "not_reachable" and len(tried) <= 1 and not body:
             raise last
         raise NewsError("no_feed", "No feed was found at this address.")
