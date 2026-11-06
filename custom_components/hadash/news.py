@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import hashlib
 import html
+from ipaddress import ip_address
 from html.entities import name2codepoint
 from io import BytesIO
 import logging
@@ -71,6 +72,15 @@ NS_ATOM = "http://www.w3.org/2005/Atom"
 NS_CONTENT = "http://purl.org/rss/1.0/modules/content/"
 NS_ITUNES = "http://www.itunes.com/dtds/podcast-1.0.dtd"
 NS_DC = "http://purl.org/dc/elements/1.1/"
+
+
+async def resolve(hass: HomeAssistant, host: str) -> list[str]:
+    """The addresses a host name points to. Tests replace this."""
+    infos = await hass.loop.getaddrinfo(host, None)
+    return [i[4][0] for i in infos]
+
+
+REDIRECTS = (301, 302, 303, 307, 308)
 
 
 class NewsError(Exception):
@@ -224,6 +234,9 @@ def parse_feed(data: bytes | str, url: str = "") -> dict[str, Any]:
     text = text.lstrip("﻿ \t\r\n")
     # The declared encoding is for bytes; the text is already decoded.
     text = re.sub(r"^<\?xml[^>]*\?>", "", text)
+    # A feed never defines its own entities. A file that does could ask the reader to expand them a billion times.
+    if re.search(r"<!ENTITY", text[:20000], re.I):
+        raise ValueError("defines its own entities")
     try:
         root = ET.fromstring(_fix_entities(text))
     except ET.ParseError as err:
@@ -473,18 +486,42 @@ class NewsStore:
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
         self._feeds: dict[str, _Feed] = {}
-        self._images: dict[str, str] = {}
+        self._images: dict[str, tuple[str, bool]] = {}
         self._pages: OrderedDict[str, str | None] = OrderedDict()
 
-    async def _get(self, url: str, limit: int, wait: float = 15) -> tuple[bytes, str, str]:
-        """(body, content type, final address)."""
+    async def at_home(self, url: str) -> bool:
+        """True when the address is in a home or private network (or names no host we can find)."""
+        host = urlparse(url).hostname
+        if not host:
+            return True
+        try:
+            found = [host] if re.fullmatch(r"[\d.]+|[0-9a-fA-F:]*:[0-9a-fA-F:.]*", host) else await resolve(self.hass, host)
+            return not found or any(not ip_address(a.split("%")[0]).is_global for a in found)
+        except (OSError, ValueError):
+            return True
+
+    async def _get(self, url: str, limit: int, wait: float = 15, public: bool = False) -> tuple[bytes, str, str]:
+        """(body, content type, final address).
+
+        public: the address came from a feed, not from the person (a story's page or picture). It, and every
+        address it sends us on to, must be on the internet: a feed must not make Home Assistant call devices
+        in the home network.
+        """
         session = async_get_clientsession(self.hass)
         try:
-            async with session.get(url, headers=HEADERS, timeout=ClientTimeout(total=wait), allow_redirects=True) as resp:
-                if resp.status >= 400:
-                    raise NewsError("not_reachable", f"The site answered {resp.status}.")
-                body = await read_up_to(resp.content, limit)
-                return body, resp.headers.get("Content-Type", "").lower(), str(resp.url)
+            async with asyncio.timeout(wait):
+                for _ in range(6):
+                    if public and await self.at_home(url):
+                        raise NewsError("not_reachable", "This address is in a home network.")
+                    async with session.get(url, headers=HEADERS, timeout=ClientTimeout(total=wait), allow_redirects=not public) as resp:
+                        if public and resp.status in REDIRECTS and resp.headers.get("Location"):
+                            url = urljoin(str(resp.url), resp.headers["Location"])
+                            continue
+                        if resp.status >= 400:
+                            raise NewsError("not_reachable", f"The site answered {resp.status}.")
+                        body = await read_up_to(resp.content, limit)
+                        return body, resp.headers.get("Content-Type", "").lower(), str(resp.url)
+                raise NewsError("not_reachable", "The site sent us on too many times.")
         except (TimeoutError, asyncio.TimeoutError) as err:
             raise NewsError("not_reachable", "The site did not answer in time.") from err
         except NewsError:
@@ -510,6 +547,8 @@ class NewsStore:
             data = await self.hass.async_add_executor_job(parse_feed, self._decode(body, ctype), final)
         except ValueError as err:
             raise NewsError("no_feed", "This address is not a feed.") from err
+        # A feed the person chose from their own home network may also link pictures and pages there.
+        data["home"] = await self.at_home(final)
         if pictures:
             await self._add_pictures(data)
         return data
@@ -528,7 +567,7 @@ class NewsStore:
                 return
             async with sem:
                 try:
-                    body, ctype, final = await self._get(link, MAX_PAGE_BYTES)
+                    body, ctype, final = await self._get(link, MAX_PAGE_BYTES, public=not data["home"])
                     found = og_image(self._decode(body, ctype), final)
                 except NewsError:
                     found = None
@@ -638,17 +677,18 @@ class NewsStore:
             raise last
         raise NewsError("no_feed", "No feed was found at this address.")
 
-    def image_url(self, url: str | None, width: int) -> str | None:
+    def image_url(self, url: str | None, width: int, home: bool = False) -> str | None:
         if not url:
             return None
         key = _key(url)
-        self._images[key] = url
+        self._images[key] = (url, home)
         if len(self._images) > 5000:
             self._images.pop(next(iter(self._images)))
         width = min(WIDTHS, key=lambda w: abs(w - width))
         return async_sign_path(self.hass, f"{IMAGE_URL}?k={key}&w={width}", SIGN_FOR)
 
-    def image_source(self, key: str) -> str | None:
+    def image_source(self, key: str) -> tuple[str, bool] | None:
+        """The picture's address, and whether its feed is in the home network (then the picture may be too)."""
         return self._images.get(key)
 
 
@@ -711,8 +751,8 @@ async def ws_news(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
                         "summary": s["summary"],
                         "link": s["link"],
                         "published": int(s["published"] * 1000) if s["published"] else None,
-                        "image": store.image_url(s["image"], msg["width"]),
-                        "thumb": store.image_url(s["image"], 480),
+                        "image": store.image_url(s["image"], msg["width"], d.get("home", False)),
+                        "thumb": store.image_url(s["image"], 480, d.get("home", False)),
                     }
                     for s in d.get("items", [])
                 ],
@@ -740,9 +780,16 @@ def _shrink(data: bytes, width: int) -> tuple[bytes, str]:
         img = ImageOps.exif_transpose(img)
         if img.width > width:
             img = img.resize((width, max(1, round(img.height * width / img.width))), Image.Resampling.LANCZOS)
+        out = BytesIO()
+        # A logo or drawing with a clear background stays clear (WebP keeps it), so the card's own color shows
+        # behind it. Saved as JPEG, the clear parts would turn black.
+        if img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info):
+            img = img.convert("RGBA")
+            if img.getextrema()[3][0] < 255:
+                img.save(out, "WEBP", quality=80, method=4)
+                return out.getvalue(), "image/webp"
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
-        out = BytesIO()
         img.save(out, "JPEG", quality=80, optimize=True, progressive=True)
         return out.getvalue(), "image/jpeg"
 
@@ -772,15 +819,18 @@ class NewsImageView(HomeAssistantView):
         hit = self._cache.get((key, width))
         if hit is None:
             try:
-                body, ctype, _ = await store._get(source, MAX_IMAGE_BYTES)  # noqa: SLF001
+                address, home = source
+                body, ctype, _ = await store._get(address, MAX_IMAGE_BYTES, public=not home)  # noqa: SLF001
                 if not ctype.startswith("image/") and not body[:12].startswith((b"\xff\xd8", b"\x89PNG", b"RIFF", b"GIF8")):
                     return web.Response(status=404)
-                if "svg" in ctype or "gif" in ctype:
-                    hit = (body, ctype.split(";")[0])
-                else:
-                    hit = await hass.async_add_executor_job(_shrink, body, width)
+                # An SVG from a feed is never passed on: it can hold a script, and this address is Home Assistant's
+                # own. A GIF becomes a small JPEG of its first frame like any photo: kept whole, a few large GIFs
+                # would fill Home Assistant's memory, and a slow tablet would play them.
+                if "svg" in ctype or body.lstrip()[:5].lower() in (b"<?xml", b"<svg "):
+                    return web.Response(status=404)
+                hit = await hass.async_add_executor_job(_shrink, body, width)
             except Exception:  # noqa: BLE001 - a missing picture only means the card shows its colour instead
-                _LOGGER.debug("News picture %s failed", source, exc_info=True)
+                _LOGGER.debug("News picture %s failed", source[0], exc_info=True)
                 return web.Response(status=404)
             self._cache[(key, width)] = hit
             while len(self._cache) > IMAGE_CACHE:
@@ -788,7 +838,9 @@ class NewsImageView(HomeAssistantView):
         else:
             self._cache.move_to_end((key, width))
         body, ctype = hit
-        return web.Response(body=body, content_type=ctype, headers={"Cache-Control": "private, max-age=86400"})
+        return web.Response(
+            body=body, content_type=ctype, headers={"Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"}
+        )
 
 
 @callback
