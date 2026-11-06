@@ -108,7 +108,57 @@ async def _host_name(hass: HomeAssistant, host: str) -> str:
         name, _, _ = await asyncio.wait_for(hass.async_add_executor_job(socket.gethostbyaddr, host), 1.5)
     except (OSError, asyncio.TimeoutError):
         return ""
-    return name.split(".")[0]
+    return _real_name(name.split(".")[0] if not _is_ip(name) else "")
+
+
+def _real_name(name: str | None) -> str:
+    """A name a person can read, or empty: "192.168.2.45" or "192" is only the address again."""
+    name = (name or "").strip()
+    return "" if not name or re.fullmatch(r"[\d.:\-]+", name) else name
+
+
+# Fire TVs announce themselves on the network with their own name ("Bedroom Fire TV"), as Amazon's
+# "Play on" service and as the Android TV remote service.
+MDNS_TYPES = ["_amzn-wplay._tcp.local.", "_androidtvremote2._tcp.local."]
+
+
+async def _mdns_names(hass: HomeAssistant, wait: float = 2.0) -> dict[str, str]:
+    """{address: name} of the TVs that announce themselves with mDNS. Empty when that does not work."""
+    try:
+        from homeassistant.components import zeroconf as ha_zeroconf
+        from zeroconf import IPVersion, ServiceStateChange
+        from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo
+
+        aiozc = await ha_zeroconf.async_get_async_instance(hass)
+    except Exception:  # noqa: BLE001 - names are a nice extra; the list works without them
+        return {}
+    seen: set[tuple[str, str]] = set()
+
+    def on_change(zeroconf: Any, service_type: str, name: str, state_change: Any) -> None:
+        if state_change is not ServiceStateChange.Removed:
+            seen.add((service_type, name))
+
+    names: dict[str, str] = {}
+    try:
+        browser = AsyncServiceBrowser(aiozc.zeroconf, MDNS_TYPES, handlers=[on_change])
+        try:
+            await asyncio.sleep(wait)
+        finally:
+            await browser.async_cancel()
+
+        async def resolve(service_type: str, name: str) -> None:
+            info = AsyncServiceInfo(service_type, name)
+            if not await info.async_request(aiozc.zeroconf, 1500):
+                return
+            label = _real_name(info.decoded_properties.get("n") or name[: -len(service_type) - 1])
+            if label:
+                for ip in info.parsed_addresses(IPVersion.V4Only):
+                    names.setdefault(ip, label)
+
+        await asyncio.gather(*(resolve(t, n) for t, n in seen))
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.debug("Looking for TV names with mDNS failed: %s", err)
+    return names
 
 
 def _known_tvs(hass: HomeAssistant) -> dict[str, str]:
@@ -160,16 +210,23 @@ async def find_tvs(hass: HomeAssistant) -> list[dict[str, Any]]:
         async with gate:
             return host if await _port_open(host) else None
 
-    open_hosts = [h for h in await asyncio.gather(*(look(h) for h in hosts)) if h]
+    looked, announced = await asyncio.gather(asyncio.gather(*(look(h) for h in hosts)), _mdns_names(hass))
+    open_hosts = [h for h in looked if h]
     saved: TvStore = hass.data[TVS]
+
+    async def name_of(host: str) -> str:
+        for name in (saved.name(host), known.get(host), announced.get(host)):
+            if _real_name(name):
+                return _real_name(name)
+        return await _host_name(hass, host)
+
     found = []
     for host in open_hosts:
-        name = saved.name(host) or known.get(host) or await _host_name(hass, host)
-        found.append({"host": host, "name": name, "added": saved.name(host) is not None})
+        found.append({"host": host, "name": await name_of(host), "added": saved.name(host) is not None})
     # Then the ones Home Assistant knows but that do not answer: their ADB debugging is off.
-    for host, title in known.items():
+    for host in known:
         if host not in open_hosts:
-            found.append({"host": host, "name": title, "added": saved.name(host) is not None, "closed": True})
+            found.append({"host": host, "name": await name_of(host), "added": saved.name(host) is not None, "closed": True})
     return found
 
 
