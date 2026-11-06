@@ -22,6 +22,8 @@ SPOTS_STORAGE_KEY = "hadash.photo_spots"
 # Home on TV: the Fire TVs set up from the studio (firetv.py).
 TVS = "hadash_tvs"
 TVS_STORAGE_KEY = "hadash.tvs"
+# News: read feeds and their pictures, in memory (news.py).
+NEWS = "hadash_news"
 
 # The integration's version, from its manifest. It is read once, when the module is imported.
 import json as _json

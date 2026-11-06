@@ -3,6 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <script>
+      // On a TV (the wall app says " TV"), the web view reports only 960 px, so everything looks twice as big.
+      // Lay the page out wider instead: the app's "Size on the TV" (" TV/1280"), 1280 by default; ?tvwidth= tries another.
+      (function () {
+        var m = /DashboardStudioWall\/\S+ TV(?:\/(\d+))?/.exec(navigator.userAgent);
+        if (!m) return;
+        var w = Number(new URLSearchParams(location.search).get("tvwidth")) || Number(m[1]) || 1280;
+        document.querySelector('meta[name="viewport"]').setAttribute("content", "width=" + w + ", user-scalable=no");
+      })();
+    </script>
     <meta name="theme-color" content="#0d0f14" />
     <title>Home</title>
     <!-- "Add to Home Screen" on iPhone, iPad and Android opens the dashboard full screen, like an app. -->
@@ -13,10 +23,10 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Dashboard" />
-    <script type="module" crossorigin src="./assets/main-D6wcobUz.js"></script>
-    <link rel="modulepreload" crossorigin href="./assets/screens-Bc3A6l1q.js">
-    <link rel="stylesheet" crossorigin href="./assets/screens-BS8dYilg.css">
-    <link rel="stylesheet" crossorigin href="./assets/main-OsrudNI2.css">
+    <script type="module" crossorigin src="./assets/main-wT9NKpMq.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/screens-D35CZtqQ.js">
+    <link rel="stylesheet" crossorigin href="./assets/screens-LLucVldP.css">
+    <link rel="stylesheet" crossorigin href="./assets/main-Che0zQz6.css">
   </head>
   <body>
     <div id="app"></div>
