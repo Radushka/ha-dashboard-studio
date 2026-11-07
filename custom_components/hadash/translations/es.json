@@ -1,0 +1,20 @@
+{
+  "entity": {
+    "select": {
+      "pipeline": {
+        "name": "Asistente",
+        "state": {
+          "preferred": "Preferido"
+        }
+      },
+      "vad_sensitivity": {
+        "name": "Detección de fin de habla",
+        "state": {
+          "aggressive": "Agresivo",
+          "default": "Predeterminado",
+          "relaxed": "Relajado"
+        }
+      }
+    }
+  }
+}

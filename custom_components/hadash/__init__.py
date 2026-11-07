@@ -6,15 +6,19 @@ The layout lives in Home Assistant's own storage, so it is part of every HA back
 
 from __future__ import annotations
 
+import logging
+
 from homeassistant.components import frontend
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.const import Platform
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 
 from .assistant import async_register as async_register_assistant
 from .autoupdate import AutoUpdater
-from .const import AUTO, DOMAIN, DRAFT, PANEL, PHOTO_VIEW, PRO, SPOTS, TVS, URL_BASE, VERSION, WWW
+from .const import AUTO, DOMAIN, DRAFT, PANEL, PHOTO_VIEW, PRO, SATELLITES, SPOTS, TVS, URL_BASE, VERSION, WWW
 from .draft import DraftStore
 from .firetv import TvStore
 from .layout import LayoutStore
@@ -22,11 +26,16 @@ from .news import async_register as async_register_news
 from .pages import FreshPageView
 from .license import ProManager
 from .photos import PhotoView
+from .satellite import Satellites
+from .satellite import async_register as async_register_satellites
 from .spots import SpotStore
 from .voice import async_register as async_register_voice
 from .websocket import async_register_commands
 
+_LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+# Wall tablets as Assist satellites (Pro): one device per tablet, with its satellite and its two voice settings.
+PLATFORMS = [Platform.ASSIST_SATELLITE, Platform.SELECT]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -57,6 +66,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async_register_news(hass)
     # Talk to the wall: Assist sentences that name a wall screen ("show the front door on the kitchen tablet").
     async_register_voice(hass)
+    hass.data[SATELLITES] = Satellites(hass)
+    await hass.data[SATELLITES].async_load()
+    async_register_satellites(hass)
     # The pages first, with "no-cache", so a browser never keeps an old studio.html after an update.
     hass.http.register_view(FreshPageView())
     # Everything else: the asset files have a hash in their names.
@@ -84,10 +96,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         },
         require_admin=True,
     )
+    hass.data[SATELLITES].entry = entry
+    # A Home Assistant without Assist (or a change in it) must never stop the dashboards: only the satellites go.
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("Wall tablets as Assist satellites: could not start", exc_info=True)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Remove the sidebar item. The files and the layout stay until Home Assistant restarts."""
     frontend.async_remove_panel(hass, PANEL)
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        hass.data[SATELLITES].entry = None
+    return unloaded
+
+
+async def async_remove_config_entry_device(hass: HomeAssistant, entry: ConfigEntry, device: dr.DeviceEntry) -> bool:
+    """A wall tablet may be deleted in Home Assistant; it comes back the next time it is a satellite."""
+    for domain, tablet in device.identifiers:
+        if domain == DOMAIN:
+            hass.data[SATELLITES].forget(tablet)
     return True

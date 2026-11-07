@@ -9,5 +9,23 @@
     "abort": {
       "single_instance_allowed": "Dashboard Studio is already set up."
     }
+  },
+  "entity": {
+    "select": {
+      "pipeline": {
+        "name": "Assistant",
+        "state": {
+          "preferred": "Preferred"
+        }
+      },
+      "vad_sensitivity": {
+        "name": "Finished speaking detection",
+        "state": {
+          "aggressive": "Aggressive",
+          "default": "Default",
+          "relaxed": "Relaxed"
+        }
+      }
+    }
   }
 }

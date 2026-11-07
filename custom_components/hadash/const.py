@@ -37,3 +37,7 @@ WWW = _Path(__file__).parent / "www"
 # Auto-update: the switch, and what the last night's look found (autoupdate.py).
 AUTO = "hadash_auto_update"
 AUTO_STORAGE_KEY = "hadash.auto_update"
+
+# Wall tablets as Assist satellites (satellite.py): the tablets seen, kept so their devices stay after a restart.
+SATELLITES = "hadash_satellites"
+SATELLITES_STORAGE_KEY = "hadash.satellites"

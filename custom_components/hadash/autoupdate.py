@@ -22,7 +22,8 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.components import persistent_notification, websocket_api
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_change
@@ -94,6 +95,15 @@ class AutoUpdater:
     @callback
     def async_start(self) -> None:
         self._unsub = async_track_time_change(self.hass, self._nightly, hour=HOUR, minute=self.minute, second=0)
+
+        # Home Assistant does not end this timer itself when it stops; a test then finds it still waiting.
+        @callback
+        def stop(_event: Event) -> None:
+            if self._unsub:
+                self._unsub()
+                self._unsub = None
+
+        self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, stop)
 
     async def _nightly(self, _now: datetime) -> None:
         if self.enabled:

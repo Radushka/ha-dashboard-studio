@@ -1,0 +1,20 @@
+{
+  "entity": {
+    "select": {
+      "pipeline": {
+        "name": "Assistent",
+        "state": {
+          "preferred": "Bevorzugt"
+        }
+      },
+      "vad_sensitivity": {
+        "name": "Sprechpausen-Erkennung",
+        "state": {
+          "aggressive": "Aggressiv",
+          "default": "Standard",
+          "relaxed": "Entspannt"
+        }
+      }
+    }
+  }
+}
