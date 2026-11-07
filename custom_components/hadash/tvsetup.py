@@ -202,3 +202,24 @@ async def update_app(
             await device.close()
         except Exception:  # noqa: BLE001
             pass
+
+
+async def bring_forward(host: str, signer: Any, device_factory: Callable[[str], Any] | None = None) -> None:
+    """Wakes a TV that was set up before and brings the wall app to the front (Send to screen).
+
+    The TV may be dark, in its screensaver or in another app. WAKEUP turns the picture on (and, over HDMI-CEC, often
+    the television too); starting the app ends the screensaver and covers another app. The app keeps its screen:
+    it takes a new address only when it is not set up yet. Nobody is there to answer "Allow USB debugging?", so a
+    TV that asks gives up at once."""
+    from adb_shell.adb_device_async import AdbDeviceTcpAsync
+
+    device = device_factory(host) if device_factory else AdbDeviceTcpAsync(host, ADB_PORT, default_transport_timeout_s=5.0)
+    await device.connect(rsa_keys=[signer], auth_timeout_s=3.0, auth_callback=lambda _d: None)
+    try:
+        await device.shell("input keyevent KEYCODE_WAKEUP", read_timeout_s=5.0, timeout_s=5.0)
+        await device.shell(f"am start -n {ACTIVITY}", read_timeout_s=8.0, timeout_s=8.0)
+    finally:
+        try:
+            await device.close()
+        except Exception:  # noqa: BLE001
+            pass

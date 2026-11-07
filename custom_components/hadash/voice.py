@@ -231,6 +231,10 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
     connection.subscriptions[msg["id"]] = gone
     connection.send_result(msg["id"])
     plan()
+    # Send to screen: a TV that was just woken gets the video that waits for it.
+    sender = hass.data.get("hadash_send")
+    if sender is not None:
+        sender.joined(voice.walls[key])
 
 
 @websocket_api.websocket_command(

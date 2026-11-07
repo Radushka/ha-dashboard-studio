@@ -97,6 +97,8 @@ class Satellites:
         self.played: dict[int, asyncio.Future[None]] = {}
         self._ids = itertools.count(1)
         self.contests: dict[str, Contest] = {}
+        # Tablets waiting to become satellites: told when the plan changes or Dashboard Studio has started.
+        self._listeners: set[Callable[[], None]] = set()
         self._store: Store[dict[str, Any]] = Store(hass, 1, SATELLITES_STORAGE_KEY)
 
     async def async_load(self) -> None:
@@ -110,6 +112,25 @@ class Satellites:
             lambda: {"tablets": {t.id: {"name": t.name, "model": t.model, "listen": t.listen} for t in self.tablets.values()}},
             1,
         )
+
+    @callback
+    def async_start(self) -> None:
+        self.hass.data[PRO].async_listen(lambda *_: self.changed())
+
+    @callback
+    def async_listen(self, listener: Callable[[], None]) -> Callable[[], None]:
+        self._listeners.add(listener)
+        return lambda: self._listeners.discard(listener)
+
+    @callback
+    def changed(self) -> None:
+        for listener in list(self._listeners):
+            listener()
+
+    @callback
+    def set_entry(self, entry: ConfigEntry | None) -> None:
+        self.entry = entry
+        self.changed()
 
     @property
     def pro(self) -> bool:
@@ -141,7 +162,8 @@ class Satellites:
         elif (tablet.model, tablet.listen) != (model, listen):
             tablet.model, tablet.listen = model, listen
             self._save()
-        if not tablet.name and name:
+        # The name follows the screen the tablet shows; a name given in Home Assistant stays (name_by_user).
+        if name and tablet.name != name:
             tablet.name = name
             self._save()
         tablet.send = send
@@ -250,19 +272,38 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
         connection.send_message(websocket_api.event_message(msg["id"], command))
 
     connection.send_result(msg["id"])
-    if not satellites.pro or satellites.entry is None:
-        # A free plan, or the integration is not set up yet: the tablet talks to Assist as before.
-        send({"action": "off"})
-        connection.subscriptions[msg["id"]] = lambda: None
-        return
-    tablet = satellites.connect(msg["tablet"], msg["name"].strip(), msg["model"].strip(), msg["listen"], send)
+    tablet: Tablet | None = None
+
+    @callback
+    def update(*_: Any) -> None:
+        """Becomes a satellite as soon as it may: on a Pro plan, once Dashboard Studio has started.
+
+        After a restart, tablets reconnect while Home Assistant is still starting, before the satellites are
+        ready. Their request waits here instead of being turned down, so they never stay without a satellite.
+        """
+        nonlocal tablet
+        ready = satellites.pro and satellites.entry is not None
+        if ready and tablet is None:
+            tablet = satellites.connect(msg["tablet"], msg["name"].strip(), msg["model"].strip(), msg["listen"], send)
+            send({"action": "ready", "device_id": satellites.device_id(tablet)})
+        elif not ready and tablet is not None:
+            satellites.disconnect(tablet, send)
+            tablet = None
+            send({"action": "off"})
+        elif not ready:
+            # A free plan, or still starting: the tablet talks to Assist as before until then.
+            send({"action": "off"})
+
+    stop_watching = satellites.async_listen(update)
 
     @callback
     def gone() -> None:
-        satellites.disconnect(tablet, send)
+        stop_watching()
+        if tablet is not None:
+            satellites.disconnect(tablet, send)
 
     connection.subscriptions[msg["id"]] = gone
-    send({"action": "ready", "device_id": satellites.device_id(tablet)})
+    update()
 
 
 @websocket_api.websocket_command(

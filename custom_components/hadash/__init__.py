@@ -28,6 +28,7 @@ from .license import ProManager
 from .photos import PhotoView
 from .satellite import Satellites
 from .satellite import async_register as async_register_satellites
+from .send import async_setup as async_setup_send
 from .spots import SpotStore
 from .voice import async_register as async_register_voice
 from .websocket import async_register_commands
@@ -68,7 +69,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async_register_voice(hass)
     hass.data[SATELLITES] = Satellites(hass)
     await hass.data[SATELLITES].async_load()
+    hass.data[SATELLITES].async_start()
     async_register_satellites(hass)
+    # Send to screen (Pro): the Share button on an iPhone or a Mac starts a YouTube video on a wall screen or TV.
+    await async_setup_send(hass)
     # The pages first, with "no-cache", so a browser never keeps an old studio.html after an update.
     hass.http.register_view(FreshPageView())
     # Everything else: the asset files have a hash in their names.
@@ -96,12 +100,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         },
         require_admin=True,
     )
-    hass.data[SATELLITES].entry = entry
     # A Home Assistant without Assist (or a change in it) must never stop the dashboards: only the satellites go.
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except Exception:  # noqa: BLE001
         _LOGGER.warning("Wall tablets as Assist satellites: could not start", exc_info=True)
+    # Tablets that connected while Home Assistant was starting become satellites now.
+    hass.data[SATELLITES].set_entry(entry)
     return True
 
 
@@ -110,7 +115,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     frontend.async_remove_panel(hass, PANEL)
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
-        hass.data[SATELLITES].entry = None
+        hass.data[SATELLITES].set_entry(None)
     return unloaded
 
 
