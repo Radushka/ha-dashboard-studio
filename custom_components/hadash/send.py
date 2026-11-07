@@ -228,18 +228,22 @@ class Sender:
             return answer
         if hosts:
             # The TV's page connects again in a moment and gets the video then.
-            self.pending[screen["id"]] = (video, time.monotonic())
+            self.pending[screen["id"]] = ({"action": "video", **video}, time.monotonic())
             return text(hass, "waking", where=screen["name"])
         return text(hass, "off", where=screen["name"])
 
     async def _deliver(self, voice: Voice, walls: list[Wall], video: dict[str, Any]) -> str | None:
         """Sends to the screen's tablets; the first one that answers gives the reply."""
+        return await self._deliver_command(voice, walls, {"action": "video", **video})
+
+    async def _deliver_command(self, voice: Voice, walls: list[Wall], command: dict[str, Any]) -> str | None:
+        """Sends any command to the screen's tablets (a video, or a card thrown from a tablet)."""
         request = next(voice._ids)
         answer: asyncio.Future[str] = self.hass.loop.create_future()
         voice.answers[request] = answer
         try:
             for wall in walls:
-                wall.send({"action": "video", "request": request, **video})
+                wall.send({**command, "request": request})
             async with asyncio.timeout(ANSWER_WAIT):
                 return await answer
         except TimeoutError:
@@ -249,10 +253,10 @@ class Sender:
 
     @callback
     def joined(self, wall: Wall) -> None:
-        """A tablet started listening (the TV's page after a wake): it gets a video that waits for its screen."""
+        """A tablet started listening (the TV's page after a wake): it gets what waits for its screen (a video or a card)."""
         waiting = self.pending.pop(wall.screen, None)
         if waiting and time.monotonic() - waiting[1] < PENDING_FOR:
-            wall.send({"action": "video", **waiting[0]})
+            wall.send(waiting[0])
 
     async def _details(self, vid: str) -> dict[str, Any]:
         """The title and channel, from YouTube's public oEmbed (no key). Optional: the video plays without them."""

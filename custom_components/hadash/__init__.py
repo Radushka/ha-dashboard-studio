@@ -29,6 +29,8 @@ from .photos import PhotoView
 from .satellite import Satellites
 from .satellite import async_register as async_register_satellites
 from .send import async_setup as async_setup_send
+from .hello import async_register as async_register_hello
+from .throw import async_register as async_register_throw
 from .spots import SpotStore
 from .voice import async_register as async_register_voice
 from .websocket import async_register_commands
@@ -36,7 +38,8 @@ from .websocket import async_register_commands
 _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 # Wall tablets as Assist satellites (Pro): one device per tablet, with its satellite and its two voice settings.
-PLATFORMS = [Platform.ASSIST_SATELLITE, Platform.SELECT]
+# Guest mode (free): one switch for the whole house (switch.py).
+PLATFORMS = [Platform.ASSIST_SATELLITE, Platform.SELECT, Platform.SWITCH]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -73,6 +76,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async_register_satellites(hass)
     # Send to screen (Pro): the Share button on an iPhone or a Mac starts a YouTube video on a wall screen or TV.
     await async_setup_send(hass)
+    # Morning hello (Pro): who was greeted today, across all tablets.
+    async_register_hello(hass)
+    # Throw it to the TV (Pro): a card flicked up on a tablet opens on a TV.
+    async_register_throw(hass)
     # The pages first, with "no-cache", so a browser never keeps an old studio.html after an update.
     hass.http.register_view(FreshPageView())
     # Everything else: the asset files have a hash in their names.

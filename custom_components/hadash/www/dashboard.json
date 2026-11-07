@@ -77,5 +77,15 @@
       "w": 4,
       "h": 1
     }
-  ]
+  ],
+  "theme": {
+    "guest": {
+      "wifi": {
+        "ssid": "Maple House Guest",
+        "password": "sunny-maple-42",
+        "security": "WPA"
+      },
+      "note": "Make yourselves at home.\n- Towels are in the hall closet\n- Kids are in bed by **8:30**\n- Pizza menu is on the fridge"
+    }
+  }
 }
