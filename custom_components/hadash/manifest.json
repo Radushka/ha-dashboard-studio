@@ -11,5 +11,5 @@
   "issue_tracker": "https://github.com/Radushka/ha-dashboard-studio/issues",
   "requirements": ["adb-shell[async]>=0.4.4"],
   "single_config_entry": true,
-  "version": "1.4.53"
+  "version": "1.4.54"
 }

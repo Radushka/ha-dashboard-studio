@@ -21,7 +21,7 @@ from aiohttp import web
 import voluptuous as vol
 
 from homeassistant.components import media_source, websocket_api
-from homeassistant.components.http import HomeAssistantView
+from homeassistant.components.http import KEY_AUTHENTICATED, HomeAssistantView
 from homeassistant.components.http.auth import async_sign_path
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -218,7 +218,9 @@ class PhotoView(HomeAssistantView):
 
     url = PHOTO_URL
     name = "api:hadash:photo"
-    requires_auth = True
+    # Checked in get(): an address signed before Home Assistant restarted is refused quietly (403). With
+    # requires_auth, Home Assistant would count each one as a failed login and warn about the tablet.
+    requires_auth = False
 
     def __init__(self) -> None:
         self._cache: OrderedDict[tuple[str, int, int], bytes] = OrderedDict()
@@ -241,6 +243,8 @@ class PhotoView(HomeAssistantView):
         return body
 
     async def get(self, request: web.Request) -> web.Response:
+        if not request[KEY_AUTHENTICATED]:
+            return web.Response(status=403)
         hass: HomeAssistant = request.app["hass"]
         media_id = request.query.get("id", "")
         try:
