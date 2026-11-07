@@ -330,20 +330,32 @@ ACTION_PREFIX = "HADASH_SEND:"
 NOTE_TAG = "hadash-send"
 
 
-def _notify_service(hass: HomeAssistant, data: dict[str, Any]) -> str | None:
-    """The notify service of the phone that shared ("mobile_app_radus_iphone"), when it can be found."""
+def _notify_service(hass: HomeAssistant, data: dict[str, Any], user_id: str | None = None) -> str | None:
+    """The notify service of the phone that shared ("mobile_app_radus_iphone"), when it can be found.
+
+    The iPhone app sends its own device ID ("radus_iphone") and name ("Radu's iPhone"); Android sends device_id.
+    These do not always match Home Assistant's slug of the name ("radu_s_iphone"), so the match ignores
+    underscores and spaces, then tries the name, and last the person who shared when they have only one phone."""
     from homeassistant.util import slugify
 
-    ids = {str(data.get(k)) for k in ("sourceDeviceID", "sourceDevicePermanentID", "device_id") if data.get(k)}
-    if not ids:
-        return None
+    def key(value: Any) -> str:
+        return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+    ids = {key(data.get(k)) for k in ("sourceDeviceID", "sourceDevicePermanentID", "device_id", "sourceDeviceName") if data.get(k)}
+    phones = []
     for entry in hass.config_entries.async_entries("mobile_app"):
         d = entry.data
         name = str(d.get("device_name") or "")
-        if ids & {str(d.get("device_id") or ""), slugify(name), entry.entry_id, str(d.get("webhook_id") or "")}:
-            service = f"mobile_app_{slugify(name)}"
-            if hass.services.has_service("notify", service):
-                return service
+        service = f"mobile_app_{slugify(name)}"
+        if not name or not hass.services.has_service("notify", service):
+            continue
+        phones.append((service, d))
+        if ids & {key(d.get("device_id")), key(name), key(entry.entry_id), key(d.get("webhook_id"))}:
+            return service
+    mine = [service for service, d in phones if user_id and d.get("user_id") == user_id]
+    if len(mine) == 1:
+        return mine[0]
+    _LOGGER.info("Send to screen: no phone matched %s (phones: %s)", sorted(ids), [s for s, _ in phones])
     return None
 
 
@@ -379,7 +391,7 @@ async def async_setup(hass: HomeAssistant) -> None:
         sender.recent = link
         reply = await sender.send(where, link)
         played = reply not in {text(hass, "pro"), text(hass, "no_video")}
-        await _tell_phone(hass, sender, _notify_service(hass, data), reply, played)
+        await _tell_phone(hass, sender, _notify_service(hass, data, event.context.user_id), reply, played)
 
     async def moved(event: Any) -> None:
         action = str(event.data.get("action") or "")
@@ -387,7 +399,7 @@ async def async_setup(hass: HomeAssistant) -> None:
             return
         screen = action[len(ACTION_PREFIX):]
         reply = await sender.send(screen or next((s["name"] for s in sender.screens() if s["id"] == ""), "Home"), sender.recent)
-        await _tell_phone(hass, sender, _notify_service(hass, dict(event.data)), reply, True)
+        await _tell_phone(hass, sender, _notify_service(hass, dict(event.data), event.context.user_id), reply, True)
 
     hass.bus.async_listen(SHARE_EVENT, shared)
     hass.bus.async_listen(ACTION_EVENT, moved)
