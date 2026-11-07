@@ -40,7 +40,9 @@ _LOGGER = logging.getLogger(__name__)
 
 RELEASES = "https://api.github.com/repos/Radushka/ha-dashboard-studio/releases/latest"
 NOTICE = "hadash_auto_update"
-EVERIES = (15, 60, 1440)  # minutes between looks: 1440 is once a night, at 3 and the home's minute
+EVERIES = (1, 15, 60, 1440)  # minutes between looks: 1440 is once a night, at 3 and the home's minute
+# 1 is hidden in the studio (shown while Option or Alt is held), for someone who releases often. GitHub's "nothing
+# new" answer (304, thanks to the ETag) does not count against its limit, so once a minute is fine.
 EVERY = 15  # the default
 NIGHT_HOUR = 3
 RETRY_AFTER = timedelta(hours=6)  # after a failed install of the same version
@@ -117,6 +119,8 @@ class AutoUpdater:
 
     def minutes(self) -> list[int]:
         """The minutes of each hour when this home looks, such as [7, 22, 37, 52] every 15 minutes."""
+        if self.every == 1:
+            return list(range(60))
         if self.every == 15:
             return list(range(self.minute % 15, 60, 15))
         return [self.minute]
