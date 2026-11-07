@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import hashlib
 import html
+import json
 from ipaddress import ip_address
 from html.entities import name2codepoint
 from io import BytesIO
@@ -352,6 +353,122 @@ def parse_feed(data: bytes | str, url: str = "") -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------- YouTube without its feed
+
+_YT_AGE = re.compile(r"(\d+)\s*(second|minute|hour|day|week|wk|month|mo|year|yr)", re.I)
+_YT_UNIT = {"second": 1, "minute": 60, "hour": 3600, "day": 86400, "week": 7 * 86400, "wk": 7 * 86400,
+            "month": 30 * 86400, "mo": 30 * 86400, "year": 365 * 86400, "yr": 365 * 86400}
+
+
+def youtube_page(url: str) -> str | None:
+    """The channel or playlist page that shows the same videos as this YouTube feed, if it is one."""
+    p = urlparse(url)
+    if not p.netloc.lower().endswith("youtube.com") or p.path != "/feeds/videos.xml":
+        return None
+    q = parse_qs(p.query)
+    if (ch := q.get("channel_id", [""])[0]) and re.fullmatch(r"UC[\w-]{10,40}", ch):
+        return f"https://www.youtube.com/channel/{ch}/videos"
+    if (pl := q.get("playlist_id", [""])[0]) and re.fullmatch(r"[\w-]{10,64}", pl):
+        return f"https://www.youtube.com/playlist?list={pl}"
+    return None
+
+
+def _yt_age(text: str, now: float) -> float | None:
+    """ "3 weeks ago" -> about that time. YouTube's pages give no exact date."""
+    m = _YT_AGE.search(text or "")
+    if not m:
+        return None
+    unit = m.group(2).lower()
+    return now - int(m.group(1)) * _YT_UNIT.get(unit, _YT_UNIT.get(unit.rstrip("s"), 0))
+
+
+def _yt_text(v: Any) -> str:
+    if isinstance(v, dict):
+        return str(v.get("content") or v.get("simpleText") or "".join(r.get("text", "") for r in v.get("runs", []) if isinstance(r, dict)))
+    return str(v or "")
+
+
+def parse_youtube_page(data: str, url: str = "", now: float | None = None) -> dict[str, Any]:
+    """The videos on a YouTube channel or playlist page, in the same shape as parse_feed.
+
+    YouTube sometimes stops serving its feeds (404 for every channel, November 2026), while the channel
+    page still lists the videos. The page carries them as JSON (ytInitialData). Only real videos are taken:
+    Shorts and live streams that have not started have no age and are left out."""
+    now = time.time() if now is None else now
+    m = re.search(r"ytInitialData\"?\]?\s*=\s*\{", data)
+    if not m:
+        raise ValueError("no ytInitialData")
+    start = m.end() - 1
+    try:
+        root, _ = json.JSONDecoder().raw_decode(data, start)
+    except ValueError as err:
+        raise ValueError(f"bad ytInitialData: {err}") from err
+
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def walk(node: Any, depth: int = 0) -> None:
+        if depth > 60 or len(items) >= MAX_ITEMS:
+            return
+        if isinstance(node, dict):
+            lock = node.get("lockupViewModel")
+            if isinstance(lock, dict) and lock.get("contentType") == "LOCKUP_CONTENT_TYPE_VIDEO":
+                add(lock)
+                return
+            vr = node.get("videoRenderer") or node.get("gridVideoRenderer") or node.get("playlistVideoRenderer")
+            if isinstance(vr, dict) and vr.get("videoId"):
+                add_old(vr)
+                return
+            for v in node.values():
+                walk(v, depth + 1)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v, depth + 1)
+
+    def keep(vid: str, title: str, age: str, image: str | None) -> None:
+        if not re.fullmatch(r"[\w-]{6,20}", vid or "") or vid in seen or not title:
+            return
+        published = _yt_age(age, now)
+        if published is None:
+            return
+        seen.add(vid)
+        items.append({"id": f"yt:video:{vid}", "title": plain(title), "summary": "", "link": f"https://www.youtube.com/watch?v={vid}",
+                      "published": published, "image": image or f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"})
+
+    def add(lock: dict[str, Any]) -> None:
+        meta = (lock.get("metadata") or {}).get("lockupMetadataViewModel") or {}
+        age = ""
+        rows = ((meta.get("metadata") or {}).get("contentMetadataViewModel") or {}).get("metadataRows") or []
+        for row in rows:
+            for part in (row or {}).get("metadataParts") or []:
+                label = (part or {}).get("accessibilityLabel") or _yt_text((part or {}).get("text"))
+                if _YT_AGE.search(label or "") and re.search(r"ago", label or "", re.I):
+                    age = label
+        image = None
+        sources = (((lock.get("contentImage") or {}).get("thumbnailViewModel") or {}).get("image") or {}).get("sources") or []
+        if sources:
+            best = max((x for x in sources if isinstance(x, dict) and x.get("url")), key=lambda x: x.get("width") or 0, default=None)
+            image = best["url"] if best else None
+        keep(str(lock.get("contentId") or ""), _yt_text(meta.get("title")), age, image)
+
+    def add_old(vr: dict[str, Any]) -> None:
+        age = _yt_text(vr.get("publishedTimeText"))
+        if not age:
+            info = (vr.get("videoInfo") or {}).get("runs") or []
+            age = " ".join(r.get("text", "") for r in info if isinstance(r, dict))
+        thumbs = (vr.get("thumbnail") or {}).get("thumbnails") or []
+        image = thumbs[-1].get("url") if thumbs and isinstance(thumbs[-1], dict) else None
+        keep(str(vr["videoId"]), _yt_text(vr.get("title")), age, image)
+
+    walk(root.get("contents"))
+    meta = root.get("metadata") or {}
+    title = _yt_text((meta.get("channelMetadataRenderer") or {}).get("title")) or _yt_text((meta.get("playlistMetadataRenderer") or {}).get("title"))
+    if not items and not title:
+        raise ValueError("no videos on the page")
+    items.sort(key=lambda s: -(s["published"] or 0))
+    return {"title": title or "YouTube", "site": url, "icon": "", "kind": "video", "items": items[:MAX_ITEMS]}
+
+
 # ---------------------------------------------------------------- finding a feed from a link
 
 _LINK_TAG = re.compile(r"<link\b[^>]*>", re.I)
@@ -500,7 +617,7 @@ class NewsStore:
         except (OSError, ValueError):
             return True
 
-    async def _get(self, url: str, limit: int, wait: float = 15, public: bool = False) -> tuple[bytes, str, str]:
+    async def _get(self, url: str, limit: int, wait: float = 15, public: bool = False, headers: dict[str, str] | None = None) -> tuple[bytes, str, str]:
         """(body, content type, final address).
 
         public: the address came from a feed, not from the person (a story's page or picture). It, and every
@@ -513,7 +630,7 @@ class NewsStore:
                 for _ in range(6):
                     if public and await self.at_home(url):
                         raise NewsError("not_reachable", "This address is in a home network.")
-                    async with session.get(url, headers=HEADERS, timeout=ClientTimeout(total=wait), allow_redirects=not public) as resp:
+                    async with session.get(url, headers={**HEADERS, **(headers or {})}, timeout=ClientTimeout(total=wait), allow_redirects=not public) as resp:
                         if public and resp.status in REDIRECTS and resp.headers.get("Location"):
                             url = urljoin(str(resp.url), resp.headers["Location"])
                             continue
@@ -542,15 +659,31 @@ class NewsStore:
             return body.decode("utf-8", "replace")
 
     async def _read(self, url: str, pictures: bool = True, wait: float = 15) -> dict[str, Any]:
-        body, ctype, final = await self._get(url, MAX_FEED_BYTES, wait)
         try:
-            data = await self.hass.async_add_executor_job(parse_feed, self._decode(body, ctype), final)
-        except ValueError as err:
-            raise NewsError("no_feed", "This address is not a feed.") from err
+            body, ctype, final = await self._get(url, MAX_FEED_BYTES, wait)
+            try:
+                data = await self.hass.async_add_executor_job(parse_feed, self._decode(body, ctype), final)
+            except ValueError as err:
+                raise NewsError("no_feed", "This address is not a feed.") from err
+        except NewsError:
+            # YouTube's feeds sometimes all fail while the channel pages still work: read the page instead.
+            page = youtube_page(url)
+            if not page:
+                raise
+            return await self._read_youtube_page(page, wait)
         # A feed the person chose from their own home network may also link pictures and pages there.
         data["home"] = await self.at_home(final)
         if pictures:
             await self._add_pictures(data)
+        return data
+
+    async def _read_youtube_page(self, page: str, wait: float) -> dict[str, Any]:
+        body, ctype, final = await self._get(page, MAX_FEED_BYTES, wait, headers={"Accept": "text/html", "Accept-Language": "en"})
+        try:
+            data = await self.hass.async_add_executor_job(parse_youtube_page, self._decode(body, ctype), final)
+        except ValueError as err:
+            raise NewsError("not_reachable", "YouTube did not send this channel's videos.") from err
+        data["home"] = False
         return data
 
     async def _add_pictures(self, data: dict[str, Any]) -> None:

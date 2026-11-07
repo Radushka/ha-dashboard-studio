@@ -1,9 +1,8 @@
-"""Send a YouTube video to a screen (Pro): the Share button on an iPhone or a Mac starts it on a wall tablet or a TV.
+"""Send a YouTube video to a screen (Pro): share it to the Home Assistant app, and it plays on a wall tablet or a TV.
 
-The person taps Share in the YouTube app, then "Send to screen", and picks a screen. An Apple Shortcut does that: it
-asks Home Assistant for the screens (GET), then sends the link and the chosen screen (POST) to one secret webhook.
-The webhook address is the only key, like a house key: it is long and random, kept in .storage, and the studio shows
-it to admins only. A new one can be made in the studio, which stops the old one at once.
+The Home Assistant app is in every share sheet already, so there is nothing to set up (see the end of this file).
+A secret webhook also takes {url, screen}, for automations and scripts: GET lists the screens, POST plays. Its
+address is kept in .storage and shown to admins only.
 
 The video plays inside the dashboard, in the watch view (YouTube's own player), never in another app. Back returns.
 A TV set up with "Add a Fire TV" is also woken over adb and the wall app is brought to the front, so the video shows
@@ -74,6 +73,12 @@ TEXT = {
         "de": "{where} wird geweckt. Das Video startet gleich.",
         "es": "Despertando {where}. El video empieza en un momento.",
     },
+    "title": {
+        "en": "Send to screen",
+        "fr": "Envoyer à l'écran",
+        "de": "An Bildschirm senden",
+        "es": "Enviar a la pantalla",
+    },
     "playing": {
         "en": "Playing on {where}.",
         "fr": "Lecture sur {where}.",
@@ -125,6 +130,8 @@ class Sender:
         self.webhook_id = ""
         self.last: list[str] = []
         self.pending: dict[str, tuple[dict[str, Any], float]] = {}
+        # The last link shared from a phone, so the notification's buttons can move it to another screen.
+        self.recent = ""
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
@@ -202,7 +209,8 @@ class Sender:
         if not video:
             return text(hass, "no_video")
         screens = self.screens()
-        screen = self.find(where) if where else (screens[0] if len(screens) == 1 else None)
+        # No screen named: the first of the list (TVs first, then the one used last).
+        screen = self.find(where) if where else (screens[0] if screens else None)
         if screen is None:
             return text(hass, "nowhere", where=where or "?")
         self.last = [screen["id"], *[s for s in self.last if s != screen["id"]]]
@@ -309,11 +317,80 @@ async def ws_info(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
     connection.send_result(msg["id"], {"address": sender.address(), "screens": sender.screens()})
 
 
+# ---- The Home Assistant app's own Share target: no setup at all ----
+# The Home Assistant app (iPhone, iPad, Mac, Android) is in every share sheet as "Home Assistant". Sharing fires
+# mobile_app.share with the link. A YouTube link plays at once on the first screen of the list (TVs first, then the
+# one used last); a screen's name typed in the share box picks that screen. The phone then gets a notification,
+# "Playing on Kitchen TV", whose buttons move the video to another screen with one tap.
+# https://companion.home-assistant.io/docs/integrations/sharing
+
+SHARE_EVENT = "mobile_app.share"
+ACTION_EVENT = "mobile_app_notification_action"
+ACTION_PREFIX = "HADASH_SEND:"
+NOTE_TAG = "hadash-send"
+
+
+def _notify_service(hass: HomeAssistant, data: dict[str, Any]) -> str | None:
+    """The notify service of the phone that shared ("mobile_app_radus_iphone"), when it can be found."""
+    from homeassistant.util import slugify
+
+    ids = {str(data.get(k)) for k in ("sourceDeviceID", "sourceDevicePermanentID", "device_id") if data.get(k)}
+    if not ids:
+        return None
+    for entry in hass.config_entries.async_entries("mobile_app"):
+        d = entry.data
+        name = str(d.get("device_name") or "")
+        if ids & {str(d.get("device_id") or ""), slugify(name), entry.entry_id, str(d.get("webhook_id") or "")}:
+            service = f"mobile_app_{slugify(name)}"
+            if hass.services.has_service("notify", service):
+                return service
+    return None
+
+
+async def _tell_phone(hass: HomeAssistant, sender: "Sender", service: str | None, reply: str, played: bool) -> None:
+    if not service:
+        return
+    data: dict[str, Any] = {"tag": NOTE_TAG, "group": NOTE_TAG}
+    if played:
+        here = sender.last[0] if sender.last else None
+        others = [s for s in sender.screens() if s["id"] != here][:4]
+        if others:
+            data["actions"] = [{"action": f"{ACTION_PREFIX}{s['id']}", "title": s["name"]} for s in others]
+    try:
+        await hass.services.async_call("notify", service, {"title": text(hass, "title"), "message": reply, "data": data})
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("Send to screen: could not notify %s", service, exc_info=True)
+
+
 async def async_setup(hass: HomeAssistant) -> None:
     sender = hass.data[SEND] = Sender(hass)
     await sender.async_load()
     sender.register()
     websocket_api.async_register_command(hass, ws_info)
+
+    async def shared(event: Any) -> None:
+        data = dict(event.data)
+        link = str(data.get("url") or data.get("text") or "")
+        # Only YouTube videos. Other shares stay for the person's own automations.
+        if not video_from(link):
+            return
+        entered = str(data.get("entered") or "").strip()
+        where = entered if entered and sender.find(entered) else ""
+        sender.recent = link
+        reply = await sender.send(where, link)
+        played = reply not in {text(hass, "pro"), text(hass, "no_video")}
+        await _tell_phone(hass, sender, _notify_service(hass, data), reply, played)
+
+    async def moved(event: Any) -> None:
+        action = str(event.data.get("action") or "")
+        if not action.startswith(ACTION_PREFIX) or not sender.recent:
+            return
+        screen = action[len(ACTION_PREFIX):]
+        reply = await sender.send(screen or next((s["name"] for s in sender.screens() if s["id"] == ""), "Home"), sender.recent)
+        await _tell_phone(hass, sender, _notify_service(hass, dict(event.data)), reply, True)
+
+    hass.bus.async_listen(SHARE_EVENT, shared)
+    hass.bus.async_listen(ACTION_EVENT, moved)
 
 
 __all__ = ["SEND", "Sender", "async_setup", "video_from"]
