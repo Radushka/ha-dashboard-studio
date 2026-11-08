@@ -13,9 +13,11 @@ a mistake comes back as a clear message, so the assistant can fix it on its own.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import re
+import time
 from typing import Any
 
 import voluptuous as vol
@@ -27,7 +29,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm
 
-from .const import DOMAIN, DRAFT, PRO, WWW
+from .const import DOMAIN, DRAFT, NEWS, PRO, WWW
 from .draft import DraftStore
 from .layout import LayoutStore
 
@@ -618,18 +620,118 @@ class SetScreenLookTool(_Tool):
         return set_screen_look(hass, args.get("screen", ""), args["look"], args.get("option"))
 
 
+# ---------- News, for anyone who asks (a voice speaker has no user)
+
+MAX_NEWS = 20
+NEWS_PROMPT = (
+    "When the person asks for the news, headlines or what is happening, call news_headlines. It reads the news "
+    "feeds of the person's Dashboard Studio News cards. Read only a few headlines aloud, in a short, natural way, "
+    "and name the source. Offer more or a summary of one story when it fits."
+)
+
+
+def _age(published: float | None, now: float) -> str:
+    if not published:
+        return ""
+    minutes = max(0, int((now - published) / 60))
+    if minutes < 60:
+        return f"{minutes} min ago"
+    if minutes < 48 * 60:
+        return f"{minutes // 60} h ago"
+    return f"{minutes // 1440} days ago"
+
+
+async def news_headlines(hass: HomeAssistant, topic: str | None, limit: int) -> dict[str, Any]:
+    """The newest stories of the News cards' feeds, newest first. topic keeps only stories that mention it."""
+    from .news import layout_feeds
+
+    store = hass.data.get(NEWS)
+    urls = sorted(layout_feeds(hass))
+    if store is None or not urls:
+        return {"stories": [], "note": "No news feeds are set up. The person can add a News card in Dashboard Studio and pick feeds."}
+    feeds = await asyncio.gather(*(store.async_feed(u) for u in urls[:30]))
+    now = time.time()
+    words = [w for w in re.findall(r"\w+", (topic or "").lower()) if len(w) > 2]
+    stories: list[dict[str, Any]] = []
+    sources: list[str] = []
+    for f in feeds:
+        d = f.data or {}
+        # Videos cards use feeds too (YouTube): those are not news to read aloud.
+        if d.get("kind") == "video":
+            continue
+        source = d.get("title") or f.url
+        sources.append(source)
+        for item in d.get("items", []):
+            text = f"{item.get('title', '')} {item.get('summary', '')}".lower()
+            if words and not any(w in text for w in words):
+                continue
+            stories.append({
+                "source": source,
+                "title": item.get("title", ""),
+                "summary": _cut_text(item.get("summary", ""), 240),
+                "published": item.get("published") or 0,
+            })
+    stories.sort(key=lambda s: s["published"], reverse=True)
+    out = [{**s, "published": _age(s["published"], now)} for s in stories[:limit]]
+    result: dict[str, Any] = {"sources": sources, "stories": out}
+    if not out:
+        result["note"] = f"No stories about {topic} right now." if words else "The feeds have no stories right now."
+    return result
+
+
+def _cut_text(text: str, limit: int) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[: limit - 1].rsplit(" ", 1)[0] + "…"
+
+
+class NewsTool(llm.Tool):
+    """The headlines of the News cards. Free, read only, and for anyone: a voice speaker talks without a user."""
+
+    name = "news_headlines"
+    description = (
+        "The latest news headlines from the feeds on the person's Dashboard Studio News cards, newest first, with "
+        "source, short summary and age. topic (optional) keeps only stories that mention it."
+    )
+    integration = DOMAIN
+    parameters = vol.Schema(
+        {vol.Optional("topic"): str, vol.Optional("limit", default=8): vol.All(int, vol.Range(min=1, max=MAX_NEWS))}
+    )
+
+    def __init__(self) -> None:
+        if hasattr(llm, "ToolAnnotations"):
+            self.annotations = llm.ToolAnnotations(read_only=True, destructive=False, idempotent=True, open_world=True)
+
+    async def async_call(self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext) -> Any:
+        args = tool_input.tool_args
+        data = await news_headlines(hass, args.get("topic"), args.get("limit", 8))
+        return _Tool._result(data, False)
+
+
+async def _is_admin(hass: HomeAssistant, llm_context: llm.LLMContext) -> bool:
+    user_id = llm_context.context.user_id if llm_context.context else None
+    user = await hass.auth.async_get_user(user_id) if user_id else None
+    return bool(user and user.is_admin)
+
+
 class DashboardStudioAPI(llm.API):
-    """The tools, offered to every assistant the person allows to use "Dashboard Studio"."""
+    """The tools, offered to every assistant the person allows to use "Dashboard Studio".
+
+    Not admin-only as a whole: Home Assistant would then refuse the whole assistant for a voice speaker or a
+    tablet, which talk without an admin, and the person would get no answer at all. Instead, everyone gets the
+    news, and only an admin also gets the tools that change the dashboards (each one checks again).
+    """
 
     def __init__(self, hass: HomeAssistant) -> None:
         super().__init__(hass=hass, id=API_ID, name=API_NAME)
-        # Home Assistant 2026.11 and newer refuse the API for anyone who is not an admin.
-        self.requires_admin = True
 
     async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
-        tools = [OverviewTool(), CardTypesTool(), FindDevicesTool(), GetScreenTool(), SaveScreenTool(), AddScreenTool(),
-                 SetScreenLookTool()]
-        return llm.APIInstance(api=self, api_prompt=PROMPT, llm_context=llm_context, tools=tools)
+        tools: list[llm.Tool] = [NewsTool()]
+        prompt = NEWS_PROMPT
+        if await _is_admin(self.hass, llm_context):
+            tools += [OverviewTool(), CardTypesTool(), FindDevicesTool(), GetScreenTool(), SaveScreenTool(),
+                      AddScreenTool(), SetScreenLookTool()]
+            prompt = f"{PROMPT}\n\n{NEWS_PROMPT}"
+        return llm.APIInstance(api=self, api_prompt=prompt, llm_context=llm_context, tools=tools)
 
 
 @callback
