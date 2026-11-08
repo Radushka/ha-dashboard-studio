@@ -993,6 +993,87 @@ class HistoryTool(llm.Tool):
         return _Tool._result(data, False)
 
 
+# ---------- The day at a glance, by voice ("Anything I should know?"), the same answers as the Today card
+
+BRIEFING_PROMPT = (
+    "When someone asks what they should know, what their day looks like, or whether they need an umbrella or a "
+    "jacket, call day_briefing. Answer in two or three short sentences, most useful first: rain or snow with "
+    "the times, what to wear, the high and low, the next events, and anything left open."
+)
+OPEN_CLASSES = {"door", "garage_door", "window", "opening"}
+
+
+async def day_briefing(hass: HomeAssistant, assistant: str | None) -> dict[str, Any]:
+    """The weather now and for the rest of the day, today's events, and what is open (only shared doors)."""
+    from homeassistant.util import dt as dt_util
+
+    now = dt_util.now()
+    out: dict[str, Any] = {"now": now.strftime("%A %H:%M")}
+    eid = _forecast_entity(hass, None)
+    if eid:
+        state = hass.states.get(eid)
+        attrs = state.attributes if state else {}
+        out["weather_now"] = {"condition": state.state if state else None, "temperature": attrs.get("temperature"),
+                              "feels_like": attrs.get("apparent_temperature"), "unit": attrs.get("temperature_unit")}
+        daily = await weather_forecast(hass, eid, "daily")
+        today = next(iter(daily.get("forecast") or []), None)
+        if today:
+            out["today"] = {k: today.get(k) for k in ("condition", "temperature", "templow", "precipitation_probability")}
+        hourly = await weather_forecast(hass, eid, "hourly")
+        rain = [f["datetime"] for f in (hourly.get("forecast") or [])[:16]
+                if (f.get("precipitation_probability") or 0) >= 50 or (f.get("precipitation") or 0) >= 0.3]
+        temps = [f["temperature"] for f in (hourly.get("forecast") or [])[:16] if f.get("temperature") is not None]
+        out["next_hours"] = {"rain_hours": rain, "coldest": min(temps) if temps else None,
+                             "warmest": max(temps) if temps else None}
+    # Today's events from every calendar.
+    calendars = hass.states.async_entity_ids("calendar")
+    if calendars:
+        end = now.replace(hour=23, minute=59, second=59)
+        try:
+            resp = await hass.services.async_call(
+                "calendar", "get_events",
+                {"entity_id": calendars, "start_date_time": now.isoformat(), "end_date_time": end.isoformat()},
+                blocking=True, return_response=True,
+            )
+            events = [
+                {"what": e.get("summary"), "start": e.get("start"), "calendar": cal}
+                for cal, data in (resp or {}).items() for e in (data or {}).get("events", [])
+            ]
+            out["events_today"] = sorted(events, key=lambda e: str(e["start"]))[:8]
+        except Exception:  # noqa: BLE001 - a calendar that does not answer
+            pass
+    # Open doors and windows, and unlocked locks: private, so only the ones shared with Assist.
+    left_open = []
+    for state in hass.states.async_all(("binary_sensor", "cover", "lock")):
+        dc = state.attributes.get("device_class")
+        is_open = (state.domain == "binary_sensor" and dc in OPEN_CLASSES and state.state == "on") or (
+            state.domain == "cover" and dc in {"garage", "door", "gate", "window"} and state.state == "open") or (
+            state.domain == "lock" and state.state in {"unlocked", "open"})
+        if is_open and _exposed(hass, assistant, state.entity_id):
+            left_open.append(state.name)
+    out["left_open"] = left_open[:10]
+    return out
+
+
+class BriefingTool(llm.Tool):
+    """The day at a glance, read only and for anyone; doors and locks only when shared with Assist."""
+
+    name = "day_briefing"
+    description = (
+        "What to know today: the weather now and how it feels, today's high and low, rain in the next hours, "
+        "today's calendar events, and doors, windows or locks left open."
+    )
+    integration = DOMAIN
+    parameters = vol.Schema({})
+
+    def __init__(self) -> None:
+        if hasattr(llm, "ToolAnnotations"):
+            self.annotations = llm.ToolAnnotations(read_only=True, destructive=False, idempotent=True, open_world=False)
+
+    async def async_call(self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext) -> Any:
+        return _Tool._result(await day_briefing(hass, llm_context.assistant), False)
+
+
 async def _is_admin(hass: HomeAssistant, llm_context: llm.LLMContext) -> bool:
     user_id = llm_context.context.user_id if llm_context.context else None
     user = await hass.auth.async_get_user(user_id) if user_id else None
@@ -1011,8 +1092,8 @@ class DashboardStudioAPI(llm.API):
         super().__init__(hass=hass, id=API_ID, name=API_NAME)
 
     async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
-        tools: list[llm.Tool] = [NewsTool(), WeatherTool(), ReadingsTool(), HistoryTool()]
-        prompt = f"{NEWS_PROMPT}\n\n{WEATHER_PROMPT}\n\n{HISTORY_PROMPT}"
+        tools: list[llm.Tool] = [NewsTool(), WeatherTool(), ReadingsTool(), HistoryTool(), BriefingTool()]
+        prompt = f"{NEWS_PROMPT}\n\n{WEATHER_PROMPT}\n\n{HISTORY_PROMPT}\n\n{BRIEFING_PROMPT}"
         if await _is_admin(self.hass, llm_context):
             tools += [OverviewTool(), CardTypesTool(), FindDevicesTool(), GetScreenTool(), SaveScreenTool(),
                       AddScreenTool(), SetScreenLookTool()]
