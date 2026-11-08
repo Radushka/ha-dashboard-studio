@@ -20,6 +20,7 @@ from .assistant import async_register as async_register_assistant
 from .autoupdate import AutoUpdater
 from .const import AUTO, DOMAIN, DRAFT, PANEL, PHOTO_VIEW, PRO, SATELLITES, SPOTS, TVS, URL_BASE, VERSION, WWW
 from .draft import DraftStore
+from .ears import async_register as async_register_ears
 from .firetv import TvStore
 from .layout import LayoutStore
 from .news import async_register as async_register_news
@@ -80,6 +81,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async_register_hello(hass)
     # Throw it to the TV (Pro): a card flicked up on a tablet opens on a TV.
     async_register_throw(hass)
+    # A tablet as a TV's ears (Pro): the tablet next to the TV hears, the TV listens, shows and answers.
+    async_register_ears(hass)
     # The pages first, with "no-cache", so a browser never keeps an old studio.html after an update.
     hass.http.register_view(FreshPageView())
     # Everything else: the asset files have a hash in their names.
