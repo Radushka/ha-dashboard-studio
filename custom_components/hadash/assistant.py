@@ -707,6 +707,292 @@ class NewsTool(llm.Tool):
         return _Tool._result(data, False)
 
 
+# ---------- The weather forecast, for anyone (Home Assistant's Assist only knows the weather right now)
+
+WEATHER_PROMPT = (
+    "For the weather later today, tomorrow or this week, call weather_forecast. Answer in one or two short "
+    "sentences: the conditions, the high and low, and rain or snow when it is likely."
+)
+
+
+def _forecast_entity(hass: HomeAssistant, entity: str | None) -> str | None:
+    """The weather the person means: the one named, the one on the dashboards, or the first one."""
+    ids = hass.states.async_entity_ids("weather")
+    if entity:
+        if entity in ids:
+            return entity
+        want = entity.lower()
+        for eid in ids:
+            state = hass.states.get(eid)
+            name = str(state.attributes.get("friendly_name", "")) if state else ""
+            if want in eid or (name and want in name.lower()):
+                return eid
+    store = hass.data.get(DOMAIN)
+    layout = json.dumps(getattr(store, "data", {}).get("layout") or {}) if store is not None else ""
+    for eid in ids:
+        if f'"{eid}"' in layout:
+            return eid
+    return ids[0] if ids else None
+
+
+async def weather_forecast(hass: HomeAssistant, entity: str | None, kind: str) -> dict[str, Any]:
+    eid = _forecast_entity(hass, entity)
+    if eid is None:
+        return {"error": "There is no weather in Home Assistant. The person can add one, for example Met.no."}
+    state = hass.states.get(eid)
+    attrs = state.attributes if state else {}
+    now = {
+        "condition": state.state if state else None,
+        "temperature": attrs.get("temperature"),
+        "humidity": attrs.get("humidity"),
+        "wind_speed": attrs.get("wind_speed"),
+    }
+    units = {"temperature": attrs.get("temperature_unit"), "wind_speed": attrs.get("wind_speed_unit"),
+             "precipitation": attrs.get("precipitation_unit")}
+    keep = ("datetime", "condition", "temperature", "templow", "precipitation_probability", "precipitation",
+            "wind_speed", "is_daytime")
+    try:
+        response = await hass.services.async_call(
+            "weather", "get_forecasts", {"entity_id": eid, "type": kind}, blocking=True, return_response=True
+        )
+        items = ((response or {}).get(eid) or {}).get("forecast") or []
+    except Exception as err:  # noqa: BLE001 - a weather that has no such forecast type
+        return {"weather": eid, "now": now, "units": units, "forecast": [], "note": f"No {kind} forecast: {err}"}
+    limit = 24 if kind == "hourly" else 14
+    forecast = [{k: f[k] for k in keep if f.get(k) is not None} for f in items[:limit]]
+    return {"weather": eid, "name": attrs.get("friendly_name", eid), "now": now, "units": units, "type": kind,
+            "forecast": forecast}
+
+
+class WeatherTool(llm.Tool):
+    """The forecast, read only and for anyone. Assist's own weather intent only tells the weather right now."""
+
+    name = "weather_forecast"
+    description = (
+        "The weather forecast: daily (the next days, with high and low) or hourly (the next 24 hours), plus the "
+        "weather now. weather (optional) is a weather entity id or name; without it, the one on the dashboards."
+    )
+    integration = DOMAIN
+    parameters = vol.Schema(
+        {vol.Optional("weather"): str, vol.Optional("type", default="daily"): vol.In(["daily", "hourly", "twice_daily"])}
+    )
+
+    def __init__(self) -> None:
+        if hasattr(llm, "ToolAnnotations"):
+            self.annotations = llm.ToolAnnotations(read_only=True, destructive=False, idempotent=True, open_world=False)
+
+    async def async_call(self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext) -> Any:
+        args = tool_input.tool_args
+        return _Tool._result(await weather_forecast(hass, args.get("weather"), args.get("type", "daily")), False)
+
+
+# ---------- History: what a device did earlier ("how cold was it last night?", "when did the door open?")
+
+HISTORY_PROMPT = (
+    "For temperatures, air quality, energy or batteries now, call home_readings. "
+    "For the past (earlier today, last night, this week), call entity_history with the device's name. Readings "
+    "are open; private devices (doors, locks, people, cameras) only when the person shares them with Assist."
+)
+MAX_HOURS = 24 * 7
+
+
+def _exposed(hass: HomeAssistant, assistant: str | None, entity_id: str) -> bool:
+    try:
+        from homeassistant.components.homeassistant.exposed_entities import async_should_expose
+    except ImportError:  # pragma: no cover - every Home Assistant with Assist has it
+        return False
+    return async_should_expose(hass, assistant or "conversation", entity_id)
+
+
+# Readings that say nothing private about the people at home: the weather, the air, energy, batteries.
+# They are open to the AI even when nobody shared them. Doors, locks, cameras, motion, presence and anything
+# else stay behind the person's own Expose choices.
+SAFE_DOMAINS = {"weather", "sun"}
+SAFE_CLASSES = {
+    "temperature", "humidity", "pressure", "atmospheric_pressure", "illuminance", "irradiance",
+    "pm1", "pm10", "pm25", "co2", "carbon_dioxide", "aqi", "volatile_organic_compounds",
+    "volatile_organic_compounds_parts", "nitrogen_dioxide", "ozone", "sulphur_dioxide",
+    "wind_speed", "wind_direction", "precipitation", "precipitation_intensity", "uv_index",
+    "energy", "power", "gas", "water", "battery", "voltage", "current", "power_factor", "apparent_power",
+    "reactive_power", "energy_storage", "volume_storage", "moisture",
+}
+
+
+# The words people use for a kind of reading.
+KIND_WORDS = {
+    "co2": {"carbon_dioxide", "co2"},
+    "air": {"carbon_dioxide", "co2", "pm1", "pm10", "pm25", "aqi", "volatile_organic_compounds", "nitrogen_dioxide", "ozone"},
+    "air_quality": {"carbon_dioxide", "co2", "pm1", "pm10", "pm25", "aqi", "volatile_organic_compounds", "nitrogen_dioxide", "ozone"},
+    "pm25": {"pm25"},
+    "voc": {"volatile_organic_compounds"},
+    "temp": {"temperature"},
+    "electricity": {"energy", "power"},
+    "rain": {"precipitation"},
+    "wind": {"wind_speed", "wind_direction"},
+    "light": {"illuminance"},
+}
+
+
+def _safe(hass: HomeAssistant, entity_id: str) -> bool:
+    domain = entity_id.split(".", 1)[0]
+    if domain in SAFE_DOMAINS:
+        return True
+    if domain != "sensor":
+        return False
+    state = hass.states.get(entity_id)
+    return bool(state and state.attributes.get("device_class") in SAFE_CLASSES)
+
+
+def _allowed(hass: HomeAssistant, assistant: str | None, entity_id: str) -> bool:
+    return _safe(hass, entity_id) or _exposed(hass, assistant, entity_id)
+
+
+def _find_exposed(hass: HomeAssistant, assistant: str | None, name: str) -> list[str]:
+    """The shared devices a name means: an entity id, or words of its name ("living room temperature")."""
+    want = " ".join(re.findall(r"\w+", name.lower()))
+    found: list[tuple[int, str]] = []
+    for state in hass.states.async_all():
+        eid = state.entity_id
+        if not _allowed(hass, assistant, eid):
+            continue
+        label = " ".join(re.findall(r"\w+", str(state.attributes.get("friendly_name", "")).lower()))
+        if eid == name or label == want:
+            found.append((0, eid))
+        elif want and want in label:
+            found.append((1, eid))
+        elif want and all(w in label or w in eid for w in want.split()):
+            found.append((2, eid))
+    found.sort()
+    return [eid for _rank, eid in found]
+
+
+async def entity_history(hass: HomeAssistant, assistant: str | None, name: str, hours: float) -> dict[str, Any]:
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    matches = _find_exposed(hass, assistant, name)
+    if not matches:
+        return {"error": f"No device matches {name}, or it is private. The person can share it with Assist in Settings, Voice assistants, Expose."}
+    eid = matches[0]
+    try:
+        from homeassistant.components.recorder import get_instance, history
+    except ImportError:
+        return {"error": "Home Assistant does not record history (the Recorder is off)."}
+    end = dt_util.utcnow()
+    start = end - timedelta(hours=min(max(hours, 0.1), MAX_HOURS))
+    states = await get_instance(hass).async_add_executor_job(
+        lambda: history.state_changes_during_period(hass, start, end, eid, no_attributes=True)
+    )
+    rows = [st for st in states.get(eid, []) if st.state not in ("unknown", "unavailable")]
+    state = hass.states.get(eid)
+    unit = state.attributes.get("unit_of_measurement") if state else None
+    out: dict[str, Any] = {"entity": eid, "name": state.name if state else eid, "hours": round((end - start).total_seconds() / 3600, 1),
+                           "now": state.state if state else None, "unit": unit}
+    if len(matches) > 1:
+        out["others"] = matches[1:6]
+    if not rows:
+        out["note"] = "Nothing recorded in that time. Home Assistant may not record this device."
+        return out
+    local = lambda st: dt_util.as_local(st.last_changed).strftime("%a %H:%M")  # noqa: E731
+    numbers = []
+    for st in rows:
+        try:
+            numbers.append((float(st.state), st))
+        except ValueError:
+            numbers = []
+            break
+    if numbers:
+        low = min(numbers, key=lambda x: x[0])
+        high = max(numbers, key=lambda x: x[0])
+        out.update(low={"value": low[0], "at": local(low[1])}, high={"value": high[0], "at": local(high[1])},
+                   average=round(sum(v for v, _ in numbers) / len(numbers), 1), first=numbers[0][0])
+        return out
+    # On and off, open and closed: each change with its time, newest first.
+    out["changes"] = [{"state": st.state, "at": local(st)} for st in reversed(rows[-30:])]
+    return out
+
+
+def home_readings(hass: HomeAssistant, assistant: str | None, kind: str | None, area: str | None) -> dict[str, Any]:
+    """The readings now: temperatures, air, energy, batteries. Safe ones always, others when shared."""
+    from homeassistant.helpers import area_registry as ar
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import entity_registry as er
+
+    ents, devs, areas = er.async_get(hass), dr.async_get(hass), ar.async_get(hass)
+
+    def area_of(eid: str) -> str:
+        entry = ents.async_get(eid)
+        area_id = entry.area_id if entry else None
+        if not area_id and entry and entry.device_id:
+            device = devs.async_get(entry.device_id)
+            area_id = device.area_id if device else None
+        found = areas.async_get_area(area_id) if area_id else None
+        return found.name if found else ""
+
+    want_kind = (kind or "").lower().replace(" ", "_").replace(".", "")
+    kinds = KIND_WORDS.get(want_kind, {want_kind} if want_kind else set())
+    want_area = (area or "").lower()
+    rows = []
+    for state in hass.states.async_all("sensor"):
+        dc = state.attributes.get("device_class")
+        if dc not in SAFE_CLASSES or state.state in ("unknown", "unavailable"):
+            continue
+        if kinds and not any(k in str(dc) for k in kinds):
+            continue
+        where = area_of(state.entity_id)
+        if want_area and want_area not in where.lower() and want_area not in state.name.lower():
+            continue
+        rows.append({"name": state.name, "kind": dc, "value": state.state,
+                     "unit": state.attributes.get("unit_of_measurement"), "area": where})
+    rows.sort(key=lambda r: (r["area"] == "", r["area"], r["kind"], r["name"]))
+    return {"readings": rows[:60], "more": max(0, len(rows) - 60)}
+
+
+class ReadingsTool(llm.Tool):
+    """Readings that are not private, open to anyone: the person does not need to share each one first."""
+
+    name = "home_readings"
+    description = (
+        "The readings at home now: temperature, humidity, air quality (CO2, PM2.5), energy and power, batteries, "
+        "rain and wind. kind (optional) is one of these, such as temperature, co2, power or battery. area "
+        "(optional) is a room."
+    )
+    integration = DOMAIN
+    parameters = vol.Schema({vol.Optional("kind"): str, vol.Optional("area"): str})
+
+    def __init__(self) -> None:
+        if hasattr(llm, "ToolAnnotations"):
+            self.annotations = llm.ToolAnnotations(read_only=True, destructive=False, idempotent=True, open_world=False)
+
+    async def async_call(self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext) -> Any:
+        args = tool_input.tool_args
+        return _Tool._result(home_readings(hass, llm_context.assistant, args.get("kind"), args.get("area")), False)
+
+
+class HistoryTool(llm.Tool):
+    """What a shared device did earlier. Read only; only devices shared with Assist."""
+
+    name = "entity_history"
+    description = (
+        "The history of one device (readings such as temperature or energy, or a device the person shares with "
+        "Assist): for numbers (temperature, energy…) the low, "
+        "high and average with times; for others (doors, lights, people) each change with its time. name is the "
+        "device's name or entity id. hours is how far back, at most 168."
+    )
+    integration = DOMAIN
+    parameters = vol.Schema({vol.Required("name"): str, vol.Optional("hours", default=24): vol.Coerce(float)})
+
+    def __init__(self) -> None:
+        if hasattr(llm, "ToolAnnotations"):
+            self.annotations = llm.ToolAnnotations(read_only=True, destructive=False, idempotent=True, open_world=False)
+
+    async def async_call(self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext) -> Any:
+        args = tool_input.tool_args
+        data = await entity_history(hass, llm_context.assistant, args["name"], args.get("hours", 24))
+        return _Tool._result(data, False)
+
+
 async def _is_admin(hass: HomeAssistant, llm_context: llm.LLMContext) -> bool:
     user_id = llm_context.context.user_id if llm_context.context else None
     user = await hass.auth.async_get_user(user_id) if user_id else None
@@ -725,12 +1011,12 @@ class DashboardStudioAPI(llm.API):
         super().__init__(hass=hass, id=API_ID, name=API_NAME)
 
     async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
-        tools: list[llm.Tool] = [NewsTool()]
-        prompt = NEWS_PROMPT
+        tools: list[llm.Tool] = [NewsTool(), WeatherTool(), ReadingsTool(), HistoryTool()]
+        prompt = f"{NEWS_PROMPT}\n\n{WEATHER_PROMPT}\n\n{HISTORY_PROMPT}"
         if await _is_admin(self.hass, llm_context):
             tools += [OverviewTool(), CardTypesTool(), FindDevicesTool(), GetScreenTool(), SaveScreenTool(),
                       AddScreenTool(), SetScreenLookTool()]
-            prompt = f"{PROMPT}\n\n{NEWS_PROMPT}"
+            prompt = f"{PROMPT}\n\n{prompt}"
         return llm.APIInstance(api=self, api_prompt=prompt, llm_context=llm_context, tools=tools)
 
 
