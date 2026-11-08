@@ -1080,6 +1080,23 @@ async def _is_admin(hass: HomeAssistant, llm_context: llm.LLMContext) -> bool:
     return bool(user and user.is_admin)
 
 
+SPEAKER_PROMPT = (
+    "The person talking to this wall tablet is probably {name}. When they say my or me (my calendar, my phone, "
+    "remind me), they mean {name}'s. Use their first name now and then, never in every answer. If something "
+    "they ask clearly belongs to someone else, ask who is talking."
+)
+
+
+def _speaker_name(hass: HomeAssistant, llm_context: llm.LLMContext) -> str | None:
+    from .satellite import speaker_of
+
+    person = speaker_of(hass, getattr(llm_context, "device_id", None))
+    state = hass.states.get(person) if person else None
+    if state is None:
+        return None
+    return str(state.attributes.get("friendly_name") or state.name).split(" ")[0] or None
+
+
 class DashboardStudioAPI(llm.API):
     """The tools, offered to every assistant the person allows to use "Dashboard Studio".
 
@@ -1094,6 +1111,10 @@ class DashboardStudioAPI(llm.API):
     async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
         tools: list[llm.Tool] = [NewsTool(), WeatherTool(), ReadingsTool(), HistoryTool(), BriefingTool()]
         prompt = f"{NEWS_PROMPT}\n\n{WEATHER_PROMPT}\n\n{HISTORY_PROMPT}\n\n{BRIEFING_PROMPT}"
+        # Who is talking to a wall tablet: the person in front of it, or the only person at home.
+        speaker = _speaker_name(self.hass, llm_context)
+        if speaker:
+            prompt = f"{prompt}\n\n{SPEAKER_PROMPT.format(name=speaker)}"
         if await _is_admin(self.hass, llm_context):
             tools += [OverviewTool(), CardTypesTool(), FindDevicesTool(), GetScreenTool(), SaveScreenTool(),
                       AddScreenTool(), SetScreenLookTool()]

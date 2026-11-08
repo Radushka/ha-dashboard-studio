@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+import time
 from collections.abc import AsyncGenerator, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -66,6 +67,9 @@ class Tablet:
         self.listen = listen
         self.send: Callable[[dict[str, Any]], None] | None = None
         self.satellite: WallSatellite | None = None
+        # Who is probably talking to the tablet (a person entity), and when the tablet said so.
+        self.person = ""
+        self.person_at = 0.0
 
     @property
     def connected(self) -> bool:
@@ -248,6 +252,23 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_state)
 
 
+# A guess of who talks is good for one conversation, not for the rest of the evening.
+PERSON_FRESH_S = 300
+
+
+@callback
+def speaker_of(hass: HomeAssistant, device_id: str | None) -> str | None:
+    """The person probably talking to the tablet with this device, when the tablet said so a moment ago."""
+    satellites: Satellites | None = hass.data.get(SATELLITES)
+    if not satellites or not device_id or satellites.entry is None:
+        return None
+    for tablet in satellites.tablets.values():
+        if tablet.person and time.monotonic() - tablet.person_at < PERSON_FRESH_S:
+            if satellites.device_id(tablet) == device_id:
+                return tablet.person
+    return None
+
+
 def _tablet(hass: HomeAssistant, tablet_id: str) -> Tablet | None:
     satellites: Satellites | None = hass.data.get(SATELLITES)
     return satellites.tablets.get(tablet_id) if satellites else None
@@ -316,6 +337,8 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
         # True: Home Assistant also answers (a conversation it started). False: only the words come back,
         # and the tablet decides: its own wall commands first, then Assist.
         vol.Optional("answer", default=False): bool,
+        # Who is probably talking: the person in front of the tablet (Follow me), or the only person at home.
+        vol.Optional("person"): vol.Any("", vol.All(str, vol.Match(r"^person\.[a-z0-9_]+$"))),
     }
 )
 @websocket_api.async_response
@@ -326,6 +349,8 @@ async def ws_run(hass: HomeAssistant, connection: websocket_api.ActiveConnection
     if satellite is None or not satellite.available:
         connection.send_error(msg["id"], "not_found", "This tablet is not a satellite")
         return
+    if "person" in msg:
+        tablet.person, tablet.person_at = msg["person"], time.monotonic()
 
     audio: asyncio.Queue[bytes] = asyncio.Queue()
 
