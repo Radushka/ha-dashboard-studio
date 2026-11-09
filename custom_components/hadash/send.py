@@ -23,8 +23,10 @@ import voluptuous as vol
 from aiohttp import web
 
 from homeassistant.components import webhook, websocket_api
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.helpers.storage import Store
 
@@ -38,6 +40,8 @@ SEND_STORAGE_KEY = "hadash.send"
 # How long a tablet has to say "playing", and how long a video waits for a screen that is coming back.
 ANSWER_WAIT = 6.0
 PENDING_FOR = 90.0
+# A video shared from a phone waits this long for "Where?": a touch on a screen, or a button on the phone.
+CATCH_FOR = 20.0
 
 VIDEO_ID = re.compile(r"^[\w-]{6,20}$")
 LINK = re.compile(r"https?://\S+")
@@ -78,6 +82,12 @@ TEXT = {
         "fr": "Envoyer à l'écran",
         "de": "An Bildschirm senden",
         "es": "Enviar a la pantalla",
+    },
+    "where": {
+        "en": "Where should it play? Touch a screen, or pick one here. Otherwise it plays on {where} in 20 seconds.",
+        "fr": "Où la lire ? Touchez un écran, ou choisissez-en un ici. Sinon, elle passe sur {where} dans 20 secondes.",
+        "de": "Wo soll es laufen? Tippen Sie auf einen Bildschirm oder wählen Sie hier einen. Sonst läuft es in 20 Sekunden auf {where}.",
+        "es": "¿Dónde se reproduce? Toque una pantalla o elija una aquí. Si no, se reproduce en {where} en 20 segundos.",
     },
     "playing": {
         "en": "Playing on {where}.",
@@ -132,6 +142,8 @@ class Sender:
         self.pending: dict[str, tuple[dict[str, Any], float]] = {}
         # The last link shared from a phone, so the notification's buttons can move it to another screen.
         self.recent = ""
+        # A shared video that waits for "Where?": {id, link, service, cancel}. None when nothing waits.
+        self.offer: dict[str, Any] | None = None
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
@@ -232,6 +244,63 @@ class Sender:
             return text(hass, "waking", where=screen["name"])
         return text(hass, "off", where=screen["name"])
 
+    # ---- "Where?": share, then touch the screen you want, or pick it on the phone ----
+
+    async def offer_video(self, link: str, service: str | None) -> None:
+        """Every screen glows for a moment, and the phone asks "Where?". A touch on a screen (OK on a TV remote) or a
+        button on the phone plays it there. With no answer, it plays on the first screen, as before."""
+        hass = self.hass
+        video = video_from(link)
+        screens = self.screens()
+        if hass.data[PRO].state()["plan"] == "free" or not video or len(screens) < 2:
+            # Nothing to choose: it plays at once (or the phone hears why not).
+            reply = await self.send("", link)
+            await _tell_phone(hass, self, service, reply, reply not in {text(hass, "pro"), text(hass, "no_video")})
+            return
+        self._end_offer()
+        offer_id = secrets.token_hex(6)
+        self.recent = link
+        self.offer = {"id": offer_id, "link": link, "service": service, "cancel": None}
+        details = await self._details(video["id"])
+        if not self.offer or self.offer["id"] != offer_id:
+            return
+        voice: Voice = hass.data[VOICE]
+        glow = {"action": "catch", "offer": offer_id, "id": video["id"], "seconds": CATCH_FOR, **details}
+        for wall in list(voice.walls.values()):
+            wall.send(glow)
+
+        @callback
+        def no_answer(_now: Any) -> None:
+            hass.async_create_task(self.answer_offer(offer_id, None))
+
+        self.offer["cancel"] = async_call_later(hass, CATCH_FOR, no_answer)
+        await _ask_phone(hass, service, text(hass, "where", where=screens[0]["name"]), screens)
+
+    def _end_offer(self) -> dict[str, Any] | None:
+        """Stops the wait: the timer ends and every screen's glow fades."""
+        offer, self.offer = self.offer, None
+        if offer is None:
+            return None
+        if offer["cancel"]:
+            offer["cancel"]()
+        voice: Voice = self.hass.data[VOICE]
+        for wall in list(voice.walls.values()):
+            wall.send({"action": "catch_end", "offer": offer["id"]})
+        return offer
+
+    async def answer_offer(self, offer_id: str, screen_id: str | None) -> bool:
+        """The answer to "Where?": a screen's id, or None for the first screen. False when nothing waits any more."""
+        if not self.offer or self.offer["id"] != offer_id:
+            return False
+        offer = self._end_offer()
+        assert offer is not None
+        where = ""
+        if screen_id is not None:
+            where = next((s["name"] for s in self.screens() if s["id"] == screen_id), screen_id) or screen_id
+        reply = await self.send(where, offer["link"])
+        await _tell_phone(self.hass, self, offer["service"], reply, True)
+        return True
+
     async def _deliver(self, voice: Voice, walls: list[Wall], video: dict[str, Any]) -> str | None:
         """Sends to the screen's tablets; the first one that answers gives the reply."""
         return await self._deliver_command(voice, walls, {"action": "video", **video})
@@ -321,11 +390,23 @@ async def ws_info(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
     connection.send_result(msg["id"], {"address": sender.address(), "screens": sender.screens()})
 
 
+@websocket_api.websocket_command(
+    {vol.Required("type"): "hadash/send/catch", vol.Required("offer"): str, vol.Optional("screen", default=""): str}
+)
+@websocket_api.async_response
+async def ws_catch(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """A screen was touched while it glowed: the shared video plays there. Works for non-admin logins, like the layout."""
+    sender: Sender = hass.data[SEND]
+    caught = await sender.answer_offer(msg["offer"], msg["screen"])
+    connection.send_result(msg["id"], {"caught": caught})
+
+
 # ---- The Home Assistant app's own Share target: no setup at all ----
 # The Home Assistant app (iPhone, iPad, Mac, Android) is in every share sheet as "Home Assistant". Sharing fires
-# mobile_app.share with the link. A YouTube link plays at once on the first screen of the list (TVs first, then the
-# one used last); a screen's name typed in the share box picks that screen. The phone then gets a notification,
-# "Playing on Kitchen TV", whose buttons move the video to another screen with one tap.
+# mobile_app.share with the link. A screen's name typed in the share box plays it there at once. Otherwise the phone
+# asks "Where?" with a button for each screen, and every screen glows: touch the one you stand at (or press OK on the
+# TV remote). With no answer in 20 seconds it plays on the first screen (TVs first, then the one used last). The
+# phone then gets "Playing on Kitchen TV", whose buttons move the video to another screen with one tap.
 # https://companion.home-assistant.io/docs/integrations/sharing
 
 SHARE_EVENT = "mobile_app.share"
@@ -378,11 +459,24 @@ async def _tell_phone(hass: HomeAssistant, sender: "Sender", service: str | None
         _LOGGER.debug("Send to screen: could not notify %s", service, exc_info=True)
 
 
+async def _ask_phone(hass: HomeAssistant, service: str | None, message: str, screens: list[dict[str, Any]]) -> None:
+    """ "Where should it play?" with a button for each screen (Android shows the first three)."""
+    if not service:
+        return
+    actions = [{"action": f"{ACTION_PREFIX}{s['id']}", "title": s["name"]} for s in screens[:4]]
+    data = {"tag": NOTE_TAG, "group": NOTE_TAG, "actions": actions}
+    try:
+        await hass.services.async_call("notify", service, {"title": text(hass, "title"), "message": message, "data": data})
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("Send to screen: could not notify %s", service, exc_info=True)
+
+
 async def async_setup(hass: HomeAssistant) -> None:
     sender = hass.data[SEND] = Sender(hass)
     await sender.async_load()
     sender.register()
     websocket_api.async_register_command(hass, ws_info)
+    websocket_api.async_register_command(hass, ws_catch)
 
     async def shared(event: Any) -> None:
         data = dict(event.data)
@@ -391,22 +485,34 @@ async def async_setup(hass: HomeAssistant) -> None:
         if not video_from(link):
             return
         entered = str(data.get("entered") or "").strip()
-        where = entered if entered and sender.find(entered) else ""
+        service = _notify_service(hass, data, event.context.user_id)
+        if not (entered and sender.find(entered)):
+            await sender.offer_video(link, service)
+            return
         sender.recent = link
-        reply = await sender.send(where, link)
+        reply = await sender.send(entered, link)
         played = reply not in {text(hass, "pro"), text(hass, "no_video")}
-        await _tell_phone(hass, sender, _notify_service(hass, data, event.context.user_id), reply, played)
+        await _tell_phone(hass, sender, service, reply, played)
 
     async def moved(event: Any) -> None:
         action = str(event.data.get("action") or "")
         if not action.startswith(ACTION_PREFIX) or not sender.recent:
             return
         screen = action[len(ACTION_PREFIX):]
+        # The answer to "Where?".
+        if sender.offer and await sender.answer_offer(sender.offer["id"], screen):
+            return
         reply = await sender.send(screen or next((s["name"] for s in sender.screens() if s["id"] == ""), "Home"), sender.recent)
         await _tell_phone(hass, sender, _notify_service(hass, dict(event.data), event.context.user_id), reply, True)
 
     hass.bus.async_listen(SHARE_EVENT, shared)
     hass.bus.async_listen(ACTION_EVENT, moved)
+
+    @callback
+    def stopping(_event: Any) -> None:
+        sender._end_offer()
+
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, stopping)
 
 
 __all__ = ["SEND", "Sender", "async_setup", "video_from"]
