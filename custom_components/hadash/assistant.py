@@ -1087,6 +1087,27 @@ SPEAKER_PROMPT = (
 )
 
 
+TABLET_PROMPT = (
+    "You are talking through the wall tablet {name}{where}. When the person says here or this room, they mean "
+    "{room}."
+)
+
+
+def _tablet_prompt(hass: HomeAssistant, llm_context: llm.LLMContext) -> str | None:
+    from .satellite import tablet_of
+
+    device_id = getattr(llm_context, "device_id", None)
+    tablet = tablet_of(hass, device_id)
+    if tablet is None:
+        return None
+    device = dr.async_get(hass).async_get(device_id) if device_id else None
+    area = ar.async_get(hass).async_get_area(device.area_id) if device and device.area_id else None
+    name = (device.name_by_user or device.name) if device else tablet.name
+    if area is None:
+        return f"You are talking through the wall tablet {name}."
+    return TABLET_PROMPT.format(name=name, where=f", in the {area.name}", room=f"the {area.name}")
+
+
 def _speaker_name(hass: HomeAssistant, llm_context: llm.LLMContext) -> str | None:
     from .satellite import speaker_of
 
@@ -1112,6 +1133,8 @@ class DashboardStudioAPI(llm.API):
         tools: list[llm.Tool] = [NewsTool(), WeatherTool(), ReadingsTool(), HistoryTool(), BriefingTool()]
         prompt = f"{NEWS_PROMPT}\n\n{WEATHER_PROMPT}\n\n{HISTORY_PROMPT}\n\n{BRIEFING_PROMPT}"
         # Who is talking to a wall tablet: the person in front of it, or the only person at home.
+        if where := _tablet_prompt(self.hass, llm_context):
+            prompt = f"{prompt}\n\n{where}"
         speaker = _speaker_name(self.hass, llm_context)
         if speaker:
             prompt = f"{prompt}\n\n{SPEAKER_PROMPT.format(name=speaker)}"

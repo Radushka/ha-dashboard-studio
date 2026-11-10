@@ -28,7 +28,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import area_registry as ar, device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 
@@ -65,6 +65,8 @@ class Tablet:
         self.name = name
         self.model = model
         self.listen = listen
+        # The tablet got its room once (or the person chose one): never again, so a room taken away stays away.
+        self.placed = False
         self.send: Callable[[dict[str, Any]], None] | None = None
         self.satellite: WallSatellite | None = None
         # Who is probably talking to the tablet (a person entity), and when the tablet said so.
@@ -108,12 +110,13 @@ class Satellites:
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
         for tid, t in (data.get("tablets") or {}).items():
-            self.tablets[tid] = Tablet(tid, t.get("name") or "", t.get("model") or "", bool(t.get("listen")))
+            tablet = self.tablets[tid] = Tablet(tid, t.get("name") or "", t.get("model") or "", bool(t.get("listen")))
+            tablet.placed = bool(t.get("placed"))
 
     @callback
     def _save(self) -> None:
         self._store.async_delay_save(
-            lambda: {"tablets": {t.id: {"name": t.name, "model": t.model, "listen": t.listen} for t in self.tablets.values()}},
+            lambda: {"tablets": {t.id: {"name": t.name, "model": t.model, "listen": t.listen, "placed": t.placed} for t in self.tablets.values()}},
             1,
         )
 
@@ -153,7 +156,24 @@ class Satellites:
             model=f"Dashboard Studio Wall · {tablet.model}" if tablet.model else "Dashboard Studio Wall",
             sw_version=VERSION,
         )
+        if not tablet.placed:
+            self._place(tablet, device)
         return device.id
+
+    @callback
+    def _place(self, tablet: Tablet, device: dr.DeviceEntry) -> None:
+        """Puts the tablet in its room, once, so Assist knows where it is talking from.
+
+        Home Assistant tells the assistant the room of the device that hears ("You are in the Kitchen"), and
+        "turn on the lights" then means the lights there. The room comes from the screen's name, such as
+        Kitchen, or Kitchen TV. A room the person set or took away in Home Assistant stays as they left it.
+        """
+        tablet.placed = True
+        self._save()
+        if device.area_id:
+            return
+        if area := room_of(self.hass, tablet.name):
+            dr.async_get(self.hass).async_update_device(device.id, area_id=area)
 
     @callback
     def connect(self, tablet_id: str, name: str, model: str, listen: bool, send: Callable[[dict[str, Any]], None]) -> Tablet:
@@ -267,6 +287,31 @@ def speaker_of(hass: HomeAssistant, device_id: str | None) -> str | None:
             if satellites.device_id(tablet) == device_id:
                 return tablet.person
     return None
+
+
+@callback
+def room_of(hass: HomeAssistant, name: str) -> str | None:
+    """The area a tablet's name points to: "Fire HD 8 (Kitchen)" or "Kitchen TV" is in the Kitchen."""
+    if not name:
+        return None
+    inner = name[name.rfind("(") + 1 : name.rfind(")")] if name.endswith(")") and "(" in name else name
+    areas = ar.async_get(hass).async_list_areas()
+    text = inner.strip().casefold()
+    if exact := next((a for a in areas if a.name.casefold() == text), None):
+        return exact.id
+    # A room's name as whole words inside the name; the longest wins ("Kitchen Dining" over "Kitchen").
+    spaced = lambda t: f" {''.join(c if c.isalnum() else ' ' for c in t.casefold()).strip()} "  # noqa: E731
+    inside = [a for a in areas if spaced(a.name) in spaced(text)]
+    return max(inside, key=lambda a: len(a.name)).id if inside else None
+
+
+@callback
+def tablet_of(hass: HomeAssistant, device_id: str | None) -> Tablet | None:
+    """The wall tablet with this device, if the conversation comes from one."""
+    satellites: Satellites | None = hass.data.get(SATELLITES)
+    if not satellites or not device_id or satellites.entry is None:
+        return None
+    return next((t for t in satellites.tablets.values() if satellites.device_id(t) == device_id), None)
 
 
 def _tablet(hass: HomeAssistant, tablet_id: str) -> Tablet | None:
