@@ -12,7 +12,9 @@ Over the same websocket as everything else:
 3. "hadash/ears/wake": the tablet heard the wake word. If its TV is ready, the TV starts to listen.
 4. "hadash/ears/audio": the tablet's sound (16 kHz, 16-bit mono, base64), passed to the TV as it comes.
 5. "hadash/ears/open" and "hadash/ears/close": the TV wants the microphone (a follow-up), or is done with it.
-6. "hadash/ears/tablets": the studio's list of tablets that can listen.
+6. "hadash/ears/state": what the TV does now (thinks, speaks, its words), so the tablet can show a calm sign of it.
+7. "hadash/ears/stop": a tap on the tablet stops the talk on the TV.
+8. "hadash/ears/tablets": the studio's list of tablets that can listen.
 """
 
 from __future__ import annotations
@@ -125,7 +127,7 @@ class Ears:
 def async_register(hass: HomeAssistant) -> None:
     ears = hass.data[EARS] = Ears(hass)
     hass.data[PRO].async_listen(lambda *_: ears.changed_all())
-    for command in (ws_tablet, ws_tv, ws_seen, ws_wake, ws_audio, ws_open, ws_close, ws_tablets):
+    for command in (ws_tablet, ws_tv, ws_seen, ws_wake, ws_audio, ws_open, ws_close, ws_state, ws_stop, ws_tablets):
         websocket_api.async_register_command(hass, command)
 
 
@@ -267,6 +269,39 @@ def ws_close(hass: HomeAssistant, connection: websocket_api.ActiveConnection, ms
     found = _tv(connection, msg["tablet"])
     if found is not None and ears.open.get(found[0]) is found[1]:
         ears.close(found[0])
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "hadash/ears/state",
+        vol.Required("tablet"): TABLET_ID,
+        vol.Required("phase"): vol.In(["idle", "listening", "thinking", "speaking"]),
+        vol.Optional("heard", default=""): vol.All(str, vol.Length(max=400)),
+        vol.Optional("answer", default=""): vol.All(str, vol.Length(max=600)),
+    }
+)
+@callback
+def ws_state(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """What the TV does with the talk now. The tablet that hears for it shows a calm sign of it."""
+    ears: Ears = hass.data[EARS]
+    found = _tv(connection, msg["tablet"])
+    side = ears.tablets.get(msg["tablet"])
+    if found is not None and side is not None and ears.tv_for(found[0]) is found[1]:
+        side.send({"action": "state", "phase": msg["phase"], "heard": msg["heard"], "answer": msg["answer"], "name": found[1].name})
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command({vol.Required("type"): "hadash/ears/stop", vol.Required("tablet"): TABLET_ID})
+@callback
+def ws_stop(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """A tap on the tablet: the TV stops listening or speaking."""
+    ears: Ears = hass.data[EARS]
+    tablet = msg["tablet"]
+    tv = ears.open.get(tablet) or ears.tv_for(tablet)
+    if tablet in ears.tablets and tv is not None:
+        tv.send({"action": "hush"})
+        ears.close(tablet)
     connection.send_result(msg["id"])
 
 
