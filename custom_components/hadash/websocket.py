@@ -20,6 +20,7 @@ from .photos import ws_photos
 from .spots import ws_photo_spot
 from .autoupdate import ws_auto
 from .updates import ws_install, ws_restart, ws_update
+from .voicecheck import ws_voice_check, ws_voice_check_apply, ws_voice_check_undo
 
 # A layout is a few hundred kilobytes at most, even with many screens. This stops a mistake from filling the disk.
 MAX_LAYOUT = 2_000_000
@@ -55,6 +56,9 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_tv_setup)
     websocket_api.async_register_command(hass, ws_tv_forget)
     websocket_api.async_register_command(hass, ws_tv_update_app)
+    websocket_api.async_register_command(hass, ws_voice_check)
+    websocket_api.async_register_command(hass, ws_voice_check_apply)
+    websocket_api.async_register_command(hass, ws_voice_check_undo)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "hadash/layout"})
