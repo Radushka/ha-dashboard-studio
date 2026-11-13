@@ -10,7 +10,7 @@
       "type": "weather",
       "entity": "weather.home",
       "label": "Weather",
-      "radar": "camera.front_door",
+      "radar": "camera.weather_radar",
       "sensors": {
         "summary": "sensor.forecast",
         "alerts": [
