@@ -30,6 +30,7 @@ from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.storage import Store
 
 from .const import STORAGE_VERSION
+from .presence import RADAR_ONLINE, where
 from .reminders import phone_services
 
 _LOGGER = logging.getLogger(__name__)
@@ -133,12 +134,13 @@ class Nudges:
     def start(self) -> None:
         @callback
         def changed(event: Event) -> None:
-            if event.data["entity_id"].startswith("person."):
-                self._check()
+            self._check()
 
         @callback
         def people_only(data: Any) -> bool:
-            return str(data["entity_id"]).startswith("person.")
+            # The trackers count too: Dashboard Studio decides who is home from them (see presence.py).
+            i = str(data["entity_id"])
+            return i.startswith(("person.", "device_tracker.")) or i == RADAR_ONLINE
 
         # Every person, also one added later.
         self._unsubs.append(self.hass.bus.async_listen("state_changed", changed, event_filter=people_only))
@@ -178,14 +180,18 @@ class Nudges:
     def _everyone_away(self) -> bool:
         people = self.hass.states.async_all("person")
         # After a power cut, states are "unknown" for a while: that is never "away".
-        return bool(people) and all(p.state not in ("home", "unknown", "unavailable") for p in people)
+        return bool(people) and all(where(self.hass, p) not in ("home", "unknown", "unavailable") for p in people)
 
     @callback
     def _check(self) -> None:
+        away = self.away.get("on") and self._everyone_away()
+        # Trackers report often: a running wait goes on while everyone is still away, so it is not started again.
+        if away and self._timer:
+            return
         if self._timer:
             self._timer()
             self._timer = None
-        if self.away.get("on") and self._everyone_away():
+        if away:
             self._timer = async_call_later(self.hass, AWAY_DELAY, self._left)
 
     async def _left(self, _now: Any) -> None:
