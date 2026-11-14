@@ -17,6 +17,10 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 
 from .alarms import async_setup as async_setup_alarms
+from .intercom import async_setup as async_setup_intercom
+from .nudges import async_setup as async_setup_nudges
+from .phones import async_setup as async_setup_phones
+from .reminders import async_setup as async_setup_reminders
 from .assistant import async_register as async_register_assistant
 from .autoupdate import AutoUpdater
 from .const import AUTO, DOMAIN, DRAFT, PANEL, PHOTO_VIEW, PRO, SATELLITES, SPOTS, TVS, URL_BASE, VERSION, WWW
@@ -82,6 +86,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async_register_hello(hass)
 
     await async_setup_alarms(hass)
+    await async_setup_reminders(hass)
+    await async_setup_phones(hass)
+    await async_setup_intercom(hass)
+    await async_setup_nudges(hass)
     # Throw it to the TV (Pro): a card flicked up on a tablet opens on a TV.
     async_register_throw(hass)
     # A tablet as a TV's ears (Pro): the tablet next to the TV hears, the TV listens, shows and answers.
