@@ -16,6 +16,7 @@ from homeassistant.const import Platform
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 
+from .alarms import async_setup as async_setup_alarms
 from .assistant import async_register as async_register_assistant
 from .autoupdate import AutoUpdater
 from .const import AUTO, DOMAIN, DRAFT, PANEL, PHOTO_VIEW, PRO, SATELLITES, SPOTS, TVS, URL_BASE, VERSION, WWW
@@ -79,6 +80,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     await async_setup_send(hass)
     # Morning hello (Pro): who was greeted today, across all tablets.
     async_register_hello(hass)
+
+    await async_setup_alarms(hass)
     # Throw it to the TV (Pro): a card flicked up on a tablet opens on a TV.
     async_register_throw(hass)
     # A tablet as a TV's ears (Pro): the tablet next to the TV hears, the TV listens, shows and answers.
