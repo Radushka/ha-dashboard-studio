@@ -15,3 +15,20 @@ Wake word names may refer to products, services, or characters owned by third
 parties. Those names are used only to identify what each model detects. No
 affiliation with or endorsement by their owners is claimed, and the Apache
 License grants no rights to any third-party trademark.
+
+Russian wake words (slushai_dom, privet_dom)
+---------------------------------------------
+"Слушай, дом" and "Привет, дом" are our own models, trained by Lukaps in 2026
+with the microWakeWord training code (Apache License 2.0, Open Home Foundation).
+They are not part of the Open Home Foundation collection above. Training used
+only material that allows commercial use:
+- Russian speech from Mozilla Common Voice 17.0 (CC0 1.0), used as voice
+  references and as negative speech.
+- Spoken samples made with Qwen3-TTS and MOSS-TTS-Nano (Apache License 2.0),
+  checked with OpenAI Whisper (MIT License).
+- LibriSpeech (CC BY 4.0), Panayotov et al., ICASSP 2015.
+- MUSAN noise, music and speech (CC BY, CC BY-SA or public domain per file;
+  tracks marked NoDerivs were left out), Snyder, Chen and Povey,
+  arXiv:1510.08484.
+- Simulated room impulse responses from OpenSLR RIRS_NOISES (Apache License
+  2.0), Ko et al., ICASSP 2017.
