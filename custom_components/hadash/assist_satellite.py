@@ -10,6 +10,7 @@ from homeassistant.components.assist_pipeline import (
     PipelineEvent,
     PipelineEventType,
     PipelineStage,
+    async_get_pipelines,
 )
 from homeassistant.components.assist_satellite import (
     AssistSatelliteAnnouncement,
@@ -61,6 +62,7 @@ class WallSatellite(AssistSatelliteEntity):
         self._attr_device_info = device_info(tablet)
         # The run that listens now: where its events go, and the number its sound comes with.
         self._send: Callable[[dict[str, Any]], None] | None = None
+        self._pipeline: str | None = None
         self._handler = 0
 
     @property
@@ -115,6 +117,7 @@ class WallSatellite(AssistSatelliteEntity):
         phrase: str | None,
         level: float | None,
         answer: bool,
+        pipeline: str | None = None,
     ) -> None:
         """One question from the tablet: its sound goes through Home Assistant's pipeline, the events go back."""
         if phrase and not await self._satellites.claim(self._tablet, phrase, level):
@@ -122,6 +125,8 @@ class WallSatellite(AssistSatelliteEntity):
             send({"type": "error", "data": {"code": "duplicate_wake_up_detected", "message": "Another tablet answers"}})
             return
         self._send, self._handler = send, handler
+        # Another language's assistant, when its own wake word was heard; it must still exist.
+        self._pipeline = pipeline if pipeline and any(p.id == pipeline for p in async_get_pipelines(self.hass)) else None
         try:
             await self.async_accept_pipeline_from_satellite(
                 stream,
@@ -134,6 +139,11 @@ class WallSatellite(AssistSatelliteEntity):
         finally:
             if self._send is send:
                 self._send = None
+                self._pipeline = None
+
+    def _resolve_pipeline(self) -> str | None:
+        """The assistant of this question: another language's one, or the tablet's own setting."""
+        return self._pipeline or super()._resolve_pipeline()
 
     @callback
     def on_pipeline_event(self, event: PipelineEvent) -> None:

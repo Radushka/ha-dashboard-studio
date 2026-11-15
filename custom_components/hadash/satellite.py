@@ -384,6 +384,9 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
         vol.Optional("answer", default=False): bool,
         # Who is probably talking: the person in front of the tablet (Follow me), or the only person at home.
         vol.Optional("person"): vol.Any("", vol.All(str, vol.Match(r"^person\.[a-z0-9_]+$"))),
+        # Another of Home Assistant's voice assistants (its pipeline id), for another language: a second wake
+        # word ("Hey Jarvis") talks with a Russian one. Without it, the tablet's own assistant setting.
+        vol.Optional("pipeline"): vol.All(str, vol.Length(min=1, max=64)),
     }
 )
 @websocket_api.async_response
@@ -417,7 +420,9 @@ async def ws_run(hass: HomeAssistant, connection: websocket_api.ActiveConnection
     # The result first: the run starts at once, and its first events must not come before it.
     connection.send_result(msg["id"])
     task = hass.async_create_task(
-        satellite.run(stream(), send, handler, msg.get("wake_word_phrase"), msg.get("wake_level"), msg["answer"]),
+        satellite.run(
+            stream(), send, handler, msg.get("wake_word_phrase"), msg.get("wake_level"), msg["answer"], msg.get("pipeline")
+        ),
         f"{DOMAIN}_satellite_run",
     )
 
