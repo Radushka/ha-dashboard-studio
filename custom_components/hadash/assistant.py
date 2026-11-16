@@ -1205,7 +1205,15 @@ def shown_screen(hass: HomeAssistant, device_id: str | None) -> tuple[str, int] 
         return None
     voice = hass.data.get(VOICE)
     wall = next((w for w in reversed(list(voice.walls.values())) if w.connection == tablet.connection), None) if voice else None
-    return (wall.screen, tablet.connection) if wall else None
+    if wall is not None:
+        return wall.screen, tablet.connection
+    # A TV that listens with a tablet also said which screen it shows (an older page may have lost the other way
+    # after a Home Assistant restart).
+    from .ears import EARS
+
+    ears = hass.data.get(EARS)
+    tv = next((tv for (c, _t), tv in ears.by_connection.items() if c == tablet.connection), None) if ears else None
+    return (tv.screen, tablet.connection) if tv else None
 
 
 def _screen_prompt(hass: HomeAssistant, llm_context: llm.LLMContext) -> str | None:
