@@ -68,29 +68,6 @@ HEADERS = {
 # These sites closed their open feeds; the studio says so instead of "no feed found".
 CLOSED = ("x.com", "twitter.com", "facebook.com", "instagram.com", "threads.net", "threads.com", "tiktok.com", "linkedin.com")
 
-# News to read aloud when the person asks in another language, and their News cards have no feed in it.
-# The tool reads them all and says the newest stories. A language not here gets the English news, translated.
-# tools/check-feeds.py checks these every week with the popular feeds.
-SPOKEN_FEEDS: dict[str, list[dict[str, str]]] = {
-    "ru": [
-        {"name": "BBC News Русская служба", "url": "https://feeds.bbci.co.uk/russian/rss.xml"},
-        {"name": "Meduza", "url": "https://meduza.io/rss/all"},
-        {"name": "DW на русском", "url": "https://rss.dw.com/xml/rss-ru-all"},
-    ],
-    "fr": [
-        {"name": "Radio-Canada", "url": "https://ici.radio-canada.ca/rss/4159"},
-        {"name": "franceinfo", "url": "https://www.francetvinfo.fr/titres.rss"},
-    ],
-    "de": [
-        {"name": "tagesschau", "url": "https://www.tagesschau.de/xml/rss2/"},
-        {"name": "DW Deutsch", "url": "https://rss.dw.com/xml/rss-de-all"},
-    ],
-    "es": [
-        {"name": "BBC News Mundo", "url": "https://feeds.bbci.co.uk/mundo/rss.xml"},
-        {"name": "El País", "url": "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada"},
-    ],
-}
-
 NS_MEDIA = "http://search.yahoo.com/mrss/"
 XML_LANG = "{http://www.w3.org/XML/1998/namespace}lang"
 NS_ATOM = "http://www.w3.org/2005/Atom"
@@ -881,6 +858,37 @@ def layout_feeds(hass: HomeAssistant) -> set[str]:
     drafts = hass.data.get(DRAFT)
     if drafts is not None:
         walk(getattr(drafts, "data", None))
+    return found
+
+
+def spoken_feeds(hass: HomeAssistant) -> list[str]:
+    """The feeds of spoken news, in the studio's order: the ones the person marked "Spoken news" on their News
+    cards. A card's feed is spoken unless it is marked quiet; "spokenFeeds" are spoken but not on the card.
+    Only the published layout counts, not the studio's draft."""
+    found: list[str] = []
+
+    def add(f: Any) -> None:
+        if isinstance(f, dict) and isinstance(f.get("url"), str) and f["url"] not in found:
+            found.append(f["url"])
+
+    def walk(v: Any) -> None:
+        if isinstance(v, dict):
+            if v.get("type") == "news":
+                for f in v.get("feeds") or []:
+                    if not (isinstance(f, dict) and f.get("quiet")):
+                        add(f)
+                for f in v.get("spokenFeeds") or []:
+                    add(f)
+            for x in v.values():
+                if isinstance(x, (dict, list)):
+                    walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+
+    store = hass.data.get(DOMAIN)
+    if store is not None:
+        walk(getattr(store, "data", {}).get("layout"))
     return found
 
 

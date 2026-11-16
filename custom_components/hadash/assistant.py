@@ -625,10 +625,9 @@ class SetScreenLookTool(_Tool):
 MAX_NEWS = 20
 NEWS_PROMPT = (
     "When the person asks for the news, headlines or what is happening, call news_headlines. It reads the news "
-    "feeds of the person's Dashboard Studio News cards. Read only a few headlines aloud, in a short, natural way, "
-    "and name the source. Offer more or a summary of one story when it fits. Always say the news in the language "
-    "the person speaks, or the one they ask for: pass that language to news_headlines, which then finds news "
-    "written in it."
+    "sources the person chose for spoken news in Dashboard Studio. Read only a few headlines aloud, in a short, "
+    "natural way, and name the source. Offer more or a summary of one story when it fits. Always say the news in "
+    "the language the person speaks, or the one they ask for: translate every story written in another language."
 )
 LANGUAGE_NAMES = {"en": "English", "fr": "French", "de": "German", "es": "Spanish", "ru": "Russian", "uk": "Ukrainian",
                   "it": "Italian", "pt": "Portuguese", "nl": "Dutch", "pl": "Polish", "ro": "Romanian"}
@@ -648,40 +647,32 @@ def _age(published: float | None, now: float) -> str:
 async def news_headlines(
     hass: HomeAssistant, topic: str | None, limit: int, language: str | None = None
 ) -> dict[str, Any]:
-    """The newest stories, newest first, in the person's language. topic keeps only stories that mention it.
+    """The newest stories of the sources marked "Spoken news" in the studio, newest first.
 
-    English: the News cards' feeds, as on the screen. Another language: the cards' feeds written in it, and a few
-    well known feeds in it (SPOKEN_FEEDS). When there are none, the English stories, and the assistant says them
-    in the person's language. The News card on the screen never changes.
+    topic keeps only stories that mention it. language is the one to say them in: a source in another language
+    is translated by the assistant. The News card on the screen never changes.
     """
-    from .news import SPOKEN_FEEDS, language_code, layout_feeds
+    from .news import language_code, spoken_feeds
 
     store = hass.data.get(NEWS)
     lang = language_code(language) or "en"
-    urls = sorted(layout_feeds(hass))
-    words = [w for w in re.findall(r"\w+", (topic or "").lower()) if len(w) > 2]
-    if lang != "en" and store is not None:
-        spoken = {f["url"]: f["name"] for f in SPOKEN_FEEDS.get(lang, [])}
-        feeds = await asyncio.gather(*(store.async_feed(u) for u in [*urls[:30], *spoken]))
-        # A feed counts when it says it is in this language, or is one of ours for it.
-        own = [f for f in feeds if f.url in spoken or (f.data or {}).get("language") == lang]
-        result = _stories(own, words, limit, names=spoken)
-        if result["stories"]:
-            return {**result, "language": lang}
+    urls = spoken_feeds(hass)
     if store is None or not urls:
-        return {"stories": [], "note": "No news feeds are set up. The person can add a News card in Dashboard Studio and pick feeds."}
+        return {"stories": [], "note": "No news sources are chosen for spoken news. The person can add a News card in Dashboard Studio and mark its sources for spoken news."}
+    words = [w for w in re.findall(r"\w+", (topic or "").lower()) if len(w) > 2]
     feeds = await asyncio.gather(*(store.async_feed(u) for u in urls[:30]))
     result = _stories(feeds, words, limit)
-    if lang != "en" and result["stories"]:
+    if result["stories"]:
         name = LANGUAGE_NAMES.get(lang, lang)
+        result["language"] = lang
         result["note"] = (
-            f"There is no news written in {name} right now, so these stories are in English. Say them in {name}, "
-            "in your own words. Keep the names of people, places and sources as they are."
+            f"Say every story in {name}. Translate the ones written in another language, in your own words. "
+            "Keep the names of people, places and sources as they are."
         )
     return result
 
 
-def _stories(feeds: list[Any], words: list[str], limit: int, names: dict[str, str] | None = None) -> dict[str, Any]:
+def _stories(feeds: list[Any], words: list[str], limit: int) -> dict[str, Any]:
     now = time.time()
     stories: list[dict[str, Any]] = []
     sources: list[str] = []
@@ -690,7 +681,7 @@ def _stories(feeds: list[Any], words: list[str], limit: int, names: dict[str, st
         # Videos cards use feeds too (YouTube): those are not news to read aloud.
         if d.get("kind") == "video" or not d.get("items"):
             continue
-        source = (names or {}).get(f.url) or d.get("title") or f.url
+        source = d.get("title") or f.url
         sources.append(source)
         for item in d.get("items", []):
             text = f"{item.get('title', '')} {item.get('summary', '')}".lower()
@@ -720,10 +711,10 @@ class NewsTool(llm.Tool):
 
     name = "news_headlines"
     description = (
-        "The latest news headlines from the feeds on the person's Dashboard Studio News cards, newest first, with "
-        "source, short summary and age. topic (optional) keeps only stories that mention it. language (optional, "
-        "a code such as ru, fr or de) is the language to say the news in: the person's own, or the one they ask "
-        "for. It finds news written in that language, or says to translate."
+        "The latest news headlines from the sources the person chose for spoken news in Dashboard Studio, newest "
+        "first, with source, short summary and age. topic (optional) keeps only stories that mention it. language "
+        "(optional, a code such as ru, fr or de) is the language to say the news in: the person's own, or the one "
+        "they ask for."
     )
     integration = DOMAIN
     parameters = vol.Schema(
