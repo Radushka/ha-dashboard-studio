@@ -72,6 +72,8 @@ class Tablet:
         # Who is probably talking to the tablet (a person entity), and when the tablet said so.
         self.person = ""
         self.person_at = 0.0
+        # The websocket the tablet's page uses now, so the screen it shows can be found (see screen_of_device).
+        self.connection = 0
 
     @property
     def connected(self) -> bool:
@@ -351,6 +353,7 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
         ready = satellites.pro and satellites.entry is not None
         if ready and tablet is None:
             tablet = satellites.connect(msg["tablet"], msg["name"].strip(), msg["model"].strip(), msg["listen"], send)
+            tablet.connection = id(connection)
             send({"action": "ready", "device_id": satellites.device_id(tablet)})
         elif not ready and tablet is not None:
             satellites.disconnect(tablet, send)

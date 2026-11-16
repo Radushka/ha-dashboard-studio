@@ -98,6 +98,8 @@ class Wall:
     names: list[str]
     tv: bool
     send: Any
+    # The page's websocket, so the voice assistant can find the screen a tablet shows (see assistant.py).
+    connection: int = 0
     words: set[str] = field(default_factory=set)
 
     def __post_init__(self) -> None:
@@ -212,7 +214,7 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
     def send(command: dict[str, Any]) -> None:
         connection.send_message(websocket_api.event_message(msg["id"], command))
 
-    voice.walls[key] = Wall(msg["screen"], [n for n in msg["names"] if n][:4], msg["tv"], send)
+    voice.walls[key] = Wall(msg["screen"], [n for n in msg["names"] if n][:4], msg["tv"], send, id(connection))
 
     # Answer cards, wall commands and the wake word are Pro. The tablet learns the plan now and when it changes.
     pro: ProManager = hass.data[PRO]

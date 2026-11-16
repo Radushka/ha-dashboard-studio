@@ -1138,6 +1138,87 @@ def _tablet_prompt(hass: HomeAssistant, llm_context: llm.LLMContext) -> str | No
     return TABLET_PROMPT.format(name=name, where=f", in the {area.name}", room=f"the {area.name}")
 
 
+SCREEN_PROMPT = (
+    'The screen the person looks at shows the Dashboard Studio screen "{name}". {cards}{menu}When the person '
+    "says on the screen, on the dashboard, this card, or names something they can see, they mean what this screen "
+    "shows. While you listen and answer, your voice look may cover the whole screen: the cards are still there "
+    "behind it."
+)
+EARS_PROMPT = (
+    "The person talks to the tablet {tablet} next to this TV, but they look at the TV. Everything they see is on "
+    "the TV's screen, not on the tablet's."
+)
+MAX_PROMPT_CARDS = 40
+
+
+def _shown_label(hass: HomeAssistant, item: dict[str, Any]) -> str:
+    """One card or menu item as the person sees it, with its devices and what they show now."""
+    label = str(item.get("name") or item.get("label") or "")
+    if item.get("type") == "room":
+        label = label or str(item.get("area") or "")
+    entities = [item["entity"]] if isinstance(item.get("entity"), str) else []
+    entities += [e for e in item.get("entities") or [] if isinstance(e, str)][:4]
+    shown = []
+    for entity_id in entities[:4]:
+        state = hass.states.get(entity_id)
+        if state is None:
+            continue
+        label = label or str(state.attributes.get("friendly_name") or entity_id)
+        unit = state.attributes.get("unit_of_measurement")
+        shown.append(f"{entity_id} is {state.state}{' ' + unit if unit else ''}")
+    kind = str(item.get("type") or "card")
+    text = f"{label[:60]} ({kind} card)" if label else f"a {kind} card"
+    return f"{text}: {', '.join(shown)}" if shown else text
+
+
+def screen_prompt(hass: HomeAssistant, screen: str) -> str:
+    """What one screen shows, from the published layout (what the tablets show, not the studio's draft)."""
+    store: LayoutStore = hass.data[DOMAIN]
+    project = store.layout or _default_project()
+    entry = next((x for x in project.get("screens") or [] if x.get("id") == screen), None) if screen else None
+    layout = (entry.get("layout") or {}) if entry else project
+    name = str((entry.get("name") or screen) if entry else project.get("title") or "Home")
+    widgets = sorted(
+        (w for w in layout.get("widgets") or [] if isinstance(w, dict) and not w.get("hidden")),
+        key=lambda w: (w.get("y") or 0, w.get("x") or 0),
+    )
+    cards = [_shown_label(hass, w) for w in widgets[:MAX_PROMPT_CARDS]]
+    menu = [
+        _shown_label(hass, m)
+        for m in [*(layout.get("menu") or []), *(layout.get("menuSide") or [])]
+        if isinstance(m, dict) and not m.get("hidden")
+    ]
+    return SCREEN_PROMPT.format(
+        name=name,
+        cards=f"Its cards, from the top: {'; '.join(cards)}. " if cards else "",
+        menu=f"Its menu: {'; '.join(menu)}. " if menu else "",
+    )
+
+
+def _screen_prompt(hass: HomeAssistant, llm_context: llm.LLMContext) -> str | None:
+    """The screen the person looks at while they talk, and for a TV, the tablet that hears for it."""
+    from .ears import EARS
+    from .satellite import tablet_of
+    from .voice import VOICE
+
+    tablet = tablet_of(hass, getattr(llm_context, "device_id", None))
+    if tablet is None or not tablet.connected or not tablet.connection:
+        return None
+    voice = hass.data.get(VOICE)
+    wall = next((w for w in reversed(list(voice.walls.values())) if w.connection == tablet.connection), None) if voice else None
+    if wall is None:
+        return None
+    prompt = screen_prompt(hass, wall.screen)
+    ears = hass.data.get(EARS)
+    if ears is not None:
+        # A TV whose microphone is a tablet: say so, so the tablet's own screen is not mistaken for the TV's.
+        heard_by = next((t for (c, t), tv in ears.by_connection.items() if c == tablet.connection and tv.visible), None)
+        side = ears.tablets.get(heard_by) if heard_by else None
+        if side is not None:
+            prompt = f"{EARS_PROMPT.format(tablet=side.name or 'near the TV')}\n\n{prompt}"
+    return prompt
+
+
 def _speaker_name(hass: HomeAssistant, llm_context: llm.LLMContext) -> str | None:
     from .satellite import speaker_of
 
@@ -1165,6 +1246,8 @@ class DashboardStudioAPI(llm.API):
         # Who is talking to a wall tablet: the person in front of it, or the only person at home.
         if where := _tablet_prompt(self.hass, llm_context):
             prompt = f"{prompt}\n\n{where}"
+        if shown := _screen_prompt(self.hass, llm_context):
+            prompt = f"{prompt}\n\n{shown}"
         speaker = _speaker_name(self.hass, llm_context)
         if speaker:
             prompt = f"{prompt}\n\n{SPEAKER_PROMPT.format(name=speaker)}"
