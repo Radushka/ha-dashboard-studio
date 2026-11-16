@@ -1195,28 +1195,175 @@ def screen_prompt(hass: HomeAssistant, screen: str) -> str:
     )
 
 
-def _screen_prompt(hass: HomeAssistant, llm_context: llm.LLMContext) -> str | None:
-    """The screen the person looks at while they talk, and for a TV, the tablet that hears for it."""
-    from .ears import EARS
+def shown_screen(hass: HomeAssistant, device_id: str | None) -> tuple[str, int] | None:
+    """The screen a wall tablet or TV shows now (its id, "" for the main one), and its page's websocket."""
     from .satellite import tablet_of
     from .voice import VOICE
 
-    tablet = tablet_of(hass, getattr(llm_context, "device_id", None))
+    tablet = tablet_of(hass, device_id)
     if tablet is None or not tablet.connected or not tablet.connection:
         return None
     voice = hass.data.get(VOICE)
     wall = next((w for w in reversed(list(voice.walls.values())) if w.connection == tablet.connection), None) if voice else None
-    if wall is None:
+    return (wall.screen, tablet.connection) if wall else None
+
+
+def _screen_prompt(hass: HomeAssistant, llm_context: llm.LLMContext) -> str | None:
+    """The screen the person looks at while they talk, and for a TV, the tablet that hears for it."""
+    from .ears import EARS
+
+    shown = shown_screen(hass, getattr(llm_context, "device_id", None))
+    if shown is None:
         return None
-    prompt = screen_prompt(hass, wall.screen)
+    screen, connection = shown
+    prompt = screen_prompt(hass, screen)
     ears = hass.data.get(EARS)
     if ears is not None:
         # A TV whose microphone is a tablet: say so, so the tablet's own screen is not mistaken for the TV's.
-        heard_by = next((t for (c, t), tv in ears.by_connection.items() if c == tablet.connection and tv.visible), None)
+        heard_by = next((t for (c, t), tv in ears.by_connection.items() if c == connection and tv.visible), None)
         side = ears.tablets.get(heard_by) if heard_by else None
         if side is not None:
             prompt = f"{EARS_PROMPT.format(tablet=side.name or 'near the TV')}\n\n{prompt}"
     return prompt
+
+
+# ---------- Videos: play one from a Videos card, on the screen the person looks at (Pro, like Send to screen)
+
+VIDEO_PROMPT = (
+    "When the person asks to play or watch a video, a channel or something from the Videos card, call "
+    "screen_videos, pick the video they mean (the newest one of a channel when they name only the channel), then "
+    "call play_video with its id. It plays on the screen they look at, unless they name another screen. Say only "
+    "a few words about it, since the video starts at once."
+)
+MAX_VIDEOS = 30
+
+
+def _layout_screens(hass: HomeAssistant) -> list[tuple[str, str, dict[str, Any]]]:
+    """Every screen of the published layout: (id, name, layout). The main one first, with id ""."""
+    store: LayoutStore = hass.data[DOMAIN]
+    project = store.layout or _default_project()
+    found = [("", str(project.get("title") or "Home"), project)]
+    for s in project.get("screens") or []:
+        if isinstance(s, dict) and s.get("id"):
+            found.append((str(s["id"]), str(s.get("name") or s["id"]), s.get("layout") or {}))
+    return found
+
+
+def _video_feeds(layout: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    for w in layout.get("widgets") or []:
+        if isinstance(w, dict) and w.get("type") == "video" and not w.get("hidden"):
+            for f in w.get("feeds") or []:
+                if isinstance(f, dict) and isinstance(f.get("url"), str) and f["url"] not in urls:
+                    urls.append(f["url"])
+    return urls
+
+
+async def screen_videos(hass: HomeAssistant, device_id: str | None, topic: str | None, limit: int) -> dict[str, Any]:
+    """The videos of the Videos cards on the screen the person looks at, newest first. When that screen has no
+    Videos card, the ones of every screen."""
+    from .send import video_from
+
+    store = hass.data.get(NEWS)
+    screens = _layout_screens(hass)
+    shown = shown_screen(hass, device_id)
+    here = next((s for s in screens if shown and s[0] == shown[0]), None)
+    urls = _video_feeds(here[2]) if here else []
+    if not urls:
+        urls = [u for s in screens for u in _video_feeds(s[2])]
+        urls = list(dict.fromkeys(urls))
+    if store is None or not urls:
+        return {"videos": [], "note": "There is no Videos card. The person can add one in Dashboard Studio."}
+    feeds = await asyncio.gather(*(store.async_feed(u) for u in urls[:30]))
+    words = [w for w in re.findall(r"\w+", (topic or "").lower()) if len(w) > 2]
+    now = time.time()
+    videos: list[dict[str, Any]] = []
+    for f in feeds:
+        d = f.data or {}
+        if d.get("kind") != "video":
+            continue
+        channel = str(d.get("title") or "YouTube")
+        for item in d.get("items") or []:
+            found = video_from(str(item.get("link") or ""))
+            # Shorts do not play in the Videos card either.
+            if not found or "/shorts/" in str(item.get("link")):
+                continue
+            vid = found["id"]
+            title = str(item.get("title") or "")
+            if words and not any(w in f"{title} {channel}".lower() for w in words):
+                continue
+            videos.append({"id": vid, "title": title, "channel": channel, "published": item.get("published") or 0})
+    videos.sort(key=lambda v: v["published"], reverse=True)
+    out = [{**v, "published": _age(v["published"], now)} for v in videos[:limit]]
+    result: dict[str, Any] = {"screen": here[1] if here else None, "videos": out}
+    if not out:
+        result["note"] = "No video about that right now." if words else "The channels have no videos right now."
+    return result
+
+
+async def play_video(hass: HomeAssistant, device_id: str | None, video_id: str, screen: str | None) -> dict[str, Any]:
+    """Plays a YouTube video on a screen: the one named, else the one the person looks at."""
+    from .send import SEND, VIDEO_ID
+
+    if not VIDEO_ID.match(video_id or ""):
+        return {"error": "Use a video id from screen_videos."}
+    screens = _layout_screens(hass)
+    shown = shown_screen(hass, device_id)
+    if screen:
+        where = screen
+    elif shown is not None:
+        where = next((name for sid, name, _ in screens if sid == shown[0]), "")
+    else:
+        where = ""
+    sender = hass.data.get(SEND)
+    if sender is None:
+        return {"error": "Playing videos is not ready yet."}
+    said = await sender.send(where, f"https://www.youtube.com/watch?v={video_id}")
+    return {"result": said}
+
+
+class VideosTool(llm.Tool):
+    """The videos of the Videos cards, to play one by voice. Read only, and for anyone (a tablet has no admin)."""
+
+    name = "screen_videos"
+    description = (
+        "The videos on the Videos card of the screen the person looks at, newest first, with title, channel and "
+        "age. topic (optional) keeps only videos whose title or channel mentions it."
+    )
+    integration = DOMAIN
+    parameters = vol.Schema(
+        {vol.Optional("topic"): str, vol.Optional("limit", default=12): vol.All(int, vol.Range(min=1, max=MAX_VIDEOS))}
+    )
+
+    def __init__(self) -> None:
+        if hasattr(llm, "ToolAnnotations"):
+            self.annotations = llm.ToolAnnotations(read_only=True, destructive=False, idempotent=True, open_world=True)
+
+    async def async_call(self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext) -> Any:
+        args = tool_input.tool_args
+        data = await screen_videos(hass, getattr(llm_context, "device_id", None), args.get("topic"), args.get("limit", 12))
+        return _Tool._result(data, False)
+
+
+class PlayVideoTool(llm.Tool):
+    """Plays a video in the dashboard's own player, never in another app. Like Send to screen."""
+
+    name = "play_video"
+    description = (
+        "Play a YouTube video in the dashboard. video_id comes from screen_videos. screen (optional) is the name "
+        "of another screen to play it on; without it, it plays on the screen the person looks at."
+    )
+    integration = DOMAIN
+    parameters = vol.Schema({vol.Required("video_id"): str, vol.Optional("screen"): str})
+
+    def __init__(self) -> None:
+        if hasattr(llm, "ToolAnnotations"):
+            self.annotations = llm.ToolAnnotations(read_only=False, destructive=False, idempotent=True, open_world=True)
+
+    async def async_call(self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext) -> Any:
+        args = tool_input.tool_args
+        data = await play_video(hass, getattr(llm_context, "device_id", None), args["video_id"], args.get("screen"))
+        return _Tool._result(data, "error" in data)
 
 
 def _speaker_name(hass: HomeAssistant, llm_context: llm.LLMContext) -> str | None:
@@ -1241,8 +1388,9 @@ class DashboardStudioAPI(llm.API):
         super().__init__(hass=hass, id=API_ID, name=API_NAME)
 
     async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
-        tools: list[llm.Tool] = [NewsTool(), WeatherTool(), ReadingsTool(), HistoryTool(), BriefingTool()]
-        prompt = f"{NEWS_PROMPT}\n\n{WEATHER_PROMPT}\n\n{HISTORY_PROMPT}\n\n{BRIEFING_PROMPT}"
+        tools: list[llm.Tool] = [NewsTool(), WeatherTool(), ReadingsTool(), HistoryTool(), BriefingTool(),
+                                 VideosTool(), PlayVideoTool()]
+        prompt = f"{NEWS_PROMPT}\n\n{WEATHER_PROMPT}\n\n{HISTORY_PROMPT}\n\n{BRIEFING_PROMPT}\n\n{VIDEO_PROMPT}"
         # Who is talking to a wall tablet: the person in front of it, or the only person at home.
         if where := _tablet_prompt(self.hass, llm_context):
             prompt = f"{prompt}\n\n{where}"
