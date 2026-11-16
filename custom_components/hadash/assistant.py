@@ -1343,6 +1343,70 @@ async def play_video(hass: HomeAssistant, device_id: str | None, video_id: str, 
     return {"result": said}
 
 
+WATCHING_PROMPT = (
+    'A video plays on this screen now: "{title}". Keep every answer to one short sentence, so the video can go '
+    "on; give more only when the person asks for it. To work the video (pause, resume, stop, next, previous, "
+    "skip, louder, quieter, full screen, autoplay), call video_control and say nothing more than a word or two."
+)
+VIDEO_ACTIONS = ["pause", "resume", "stop", "next", "previous", "restart", "skip", "louder", "quieter", "mute", "unmute",
+                 "full_screen", "exit_full_screen", "autoplay_on", "autoplay_off"]
+
+
+def _watching_prompt(hass: HomeAssistant, llm_context: llm.LLMContext) -> str | None:
+    from .satellite import tablet_of
+
+    tablet = tablet_of(hass, getattr(llm_context, "device_id", None))
+    if tablet is None or not tablet.connected or not tablet.watching:
+        return None
+    return WATCHING_PROMPT.format(title=tablet.watching.replace('"', "'"))
+
+
+async def video_control(hass: HomeAssistant, device_id: str | None, action: str, seconds: int | None) -> dict[str, Any]:
+    """Works the video on the screen the person looks at: the page does it and says how it went."""
+    from .send import SEND
+    from .voice import VOICE
+
+    shown = shown_screen(hass, device_id)
+    voice = hass.data.get(VOICE)
+    sender = hass.data.get(SEND)
+    walls = [w for w in voice.walls.values() if shown and w.connection == shown[1]] if voice else []
+    if not walls or sender is None:
+        return {"error": "This device shows no screen that can play a video."}
+    command: dict[str, Any] = {"action": "player", "do": action}
+    if action == "skip":
+        command["seconds"] = seconds if seconds else 30
+    said = await sender._deliver_command(voice, walls, command)  # noqa: SLF001
+    return {"result": said or "The screen did not answer."}
+
+
+class VideoControlTool(llm.Tool):
+    """Pause, skip and the like, for any language and freer words. The wall understands the usual sentences itself."""
+
+    name = "video_control"
+    description = (
+        "Work the video that plays on the screen the person looks at. action: pause, resume (also continues the "
+        "last video where it stopped), stop (closes it and remembers the place), next, previous, restart, skip "
+        "(seconds: forward, or negative to go back; 30 when left out), louder, quieter, mute, unmute, "
+        "full_screen, exit_full_screen, autoplay_on, autoplay_off (whether the next video starts by itself)."
+    )
+    integration = DOMAIN
+    parameters = vol.Schema(
+        {
+            vol.Required("action"): vol.In(VIDEO_ACTIONS),
+            vol.Optional("seconds"): vol.All(vol.Coerce(int), vol.Range(min=-10800, max=10800)),
+        }
+    )
+
+    def __init__(self) -> None:
+        if hasattr(llm, "ToolAnnotations"):
+            self.annotations = llm.ToolAnnotations(read_only=False, destructive=False, idempotent=False, open_world=False)
+
+    async def async_call(self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext) -> Any:
+        args = tool_input.tool_args
+        data = await video_control(hass, getattr(llm_context, "device_id", None), args["action"], args.get("seconds"))
+        return _Tool._result(data, "error" in data)
+
+
 class VideosTool(llm.Tool):
     """The videos of the Videos cards, to play one by voice. Read only, and for anyone (a tablet has no admin)."""
 
@@ -1411,13 +1475,15 @@ class DashboardStudioAPI(llm.API):
 
     async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
         tools: list[llm.Tool] = [NewsTool(), WeatherTool(), ReadingsTool(), HistoryTool(), BriefingTool(),
-                                 VideosTool(), PlayVideoTool()]
+                                 VideosTool(), PlayVideoTool(), VideoControlTool()]
         prompt = f"{NEWS_PROMPT}\n\n{WEATHER_PROMPT}\n\n{HISTORY_PROMPT}\n\n{BRIEFING_PROMPT}\n\n{VIDEO_PROMPT}"
         # Who is talking to a wall tablet: the person in front of it, or the only person at home.
         if where := _tablet_prompt(self.hass, llm_context):
             prompt = f"{prompt}\n\n{where}"
         if shown := _screen_prompt(self.hass, llm_context):
             prompt = f"{prompt}\n\n{shown}"
+        if watching := _watching_prompt(self.hass, llm_context):
+            prompt = f"{prompt}\n\n{watching}"
         speaker = _speaker_name(self.hass, llm_context)
         if speaker:
             prompt = f"{prompt}\n\n{SPEAKER_PROMPT.format(name=speaker)}"

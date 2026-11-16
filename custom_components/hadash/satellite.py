@@ -72,6 +72,8 @@ class Tablet:
         # Who is probably talking to the tablet (a person entity), and when the tablet said so.
         self.person = ""
         self.person_at = 0.0
+        # The video that plays on the tablet now (its title), said by the page. Empty: none.
+        self.watching = ""
         # The websocket the tablet's page uses now, so the screen it shows can be found (see screen_of_device).
         self.connection = 0
 
@@ -201,6 +203,7 @@ class Satellites:
         # A tablet that reconnected already has a new connection; only the one that went away ends.
         if tablet.send is not send:
             return
+        tablet.watching = ""
         tablet.send = None
         if tablet.satellite is not None:
             tablet.satellite.connection_lost()
@@ -272,6 +275,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_run)
     websocket_api.async_register_command(hass, ws_done)
     websocket_api.async_register_command(hass, ws_state)
+    websocket_api.async_register_command(hass, ws_watching)
 
 
 # A guess of who talks is good for one conversation, not for the rest of the evening.
@@ -470,4 +474,20 @@ def ws_state(hass: HomeAssistant, connection: websocket_api.ActiveConnection, ms
     tablet = _tablet(hass, msg["tablet"])
     if tablet and tablet.satellite:
         tablet.satellite.tablet_state(msg["state"])
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "hadash/satellite/watching",
+        vol.Required("tablet"): str,
+        vol.Optional("title", default=""): vol.All(str, vol.Length(max=200)),
+    }
+)
+@callback
+def ws_watching(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """A video plays on the tablet (its title), or no longer (empty). The assistant then keeps its answers short."""
+    tablet = _tablet(hass, msg["tablet"])
+    if tablet:
+        tablet.watching = msg["title"].strip()
     connection.send_result(msg["id"])
