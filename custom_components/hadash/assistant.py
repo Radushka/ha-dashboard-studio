@@ -1238,11 +1238,14 @@ def _screen_prompt(hass: HomeAssistant, llm_context: llm.LLMContext) -> str | No
 # ---------- Videos: play one from a Videos card, on the screen the person looks at (Pro, like Send to screen)
 
 VIDEO_PROMPT = (
-    "When the person asks to play or watch a video, a channel or something from the Videos card, call "
-    "screen_videos, pick the video they mean (the newest one of a channel when they name only the channel), then "
-    "call play_video with its id. number is the video's place on the card: 1 is the big video at the top (the "
-    "featured, main or top video), 2 the first row under it, and so on, so the third video is number 3. It plays on the screen they look at, unless "
-    "they name another screen. Say only "
+    "When the person asks to play or watch a video, a channel or something from the Videos card: "
+    "1. By its place (the first, third or last video, the featured, main or top video): call play_video with "
+    "number only. 1 is the big video at the top (the featured, main or top video), 2 the first row under it, and "
+    "so on, so the third video is number 3. The screen itself then plays what it shows at that place now. "
+    "2. By its name, channel or topic: call screen_videos now, pick the video they mean (the newest one of a "
+    "channel when they name only the channel), then call play_video with its id. "
+    "The card changes during the day: never use a video id or a list from earlier in the talk. "
+    "It plays on the screen they look at, unless they name another screen. Say only "
     "a few words about it, since the video starts at once."
 )
 MAX_VIDEOS = 30
@@ -1322,23 +1325,44 @@ async def screen_videos(hass: HomeAssistant, device_id: str | None, topic: str |
     return result
 
 
-async def play_video(hass: HomeAssistant, device_id: str | None, video_id: str, screen: str | None) -> dict[str, Any]:
-    """Plays a YouTube video on a screen: the one named, else the one the person looks at."""
+async def play_video(
+    hass: HomeAssistant, device_id: str | None, video_id: str | None, screen: str | None,
+    number: int | None = None, card: str | None = None,
+) -> dict[str, Any]:
+    """Plays a YouTube video on a screen: the one named, else the one the person looks at. By its place on the
+    Videos card (number), the screen itself plays what it shows there now, so it is never an older list."""
     from .send import SEND, VIDEO_ID
+    from .voice import VOICE
 
-    if not VIDEO_ID.match(video_id or ""):
-        return {"error": "Use a video id from screen_videos."}
     screens = _layout_screens(hass)
     shown = shown_screen(hass, device_id)
+    sender = hass.data.get(SEND)
+    if sender is None:
+        return {"error": "Playing videos is not ready yet."}
+    if number is not None:
+        voice = hass.data.get(VOICE)
+        walls = [w for w in voice.walls.values() if shown and w.connection == shown[1]] if voice else []
+        if walls and not screen:
+            command: dict[str, Any] = {"action": "video_place", "number": number}
+            if card:
+                command["card"] = card
+            said = await sender._deliver_command(voice, walls, command)  # noqa: SLF001
+            if said:
+                return {"result": said}
+        # No screen answered (an older page, or another screen was named): the list is read now, and that video plays.
+        listed = await screen_videos(hass, device_id, None, MAX_VIDEOS)
+        found = next((v for v in listed["videos"] if v["number"] == number and (not card or v["card"].lower() == card.lower())), None)
+        if found is None:
+            return {"error": f"The Videos card has no video number {number}."}
+        video_id = found["id"]
+    if not VIDEO_ID.match(video_id or ""):
+        return {"error": "Use a video id from screen_videos, or a number."}
     if screen:
         where = screen
     elif shown is not None:
         where = next((name for sid, name, _ in screens if sid == shown[0]), "")
     else:
         where = ""
-    sender = hass.data.get(SEND)
-    if sender is None:
-        return {"error": "Playing videos is not ready yet."}
     said = await sender.send(where, f"https://www.youtube.com/watch?v={video_id}")
     return {"result": said}
 
@@ -1436,11 +1460,20 @@ class PlayVideoTool(llm.Tool):
 
     name = "play_video"
     description = (
-        "Play a YouTube video in the dashboard. video_id comes from screen_videos. screen (optional) is the name "
-        "of another screen to play it on; without it, it plays on the screen the person looks at."
+        "Play a YouTube video in the dashboard. Give number (the video's place on the Videos card, 1 is the big "
+        "one at the top) when the person names a place, or video_id from a screen_videos call made just now. "
+        "card (optional) is the Videos card's name when the screen has more than one. screen (optional) is the "
+        "name of another screen to play it on; without it, it plays on the screen the person looks at."
     )
     integration = DOMAIN
-    parameters = vol.Schema({vol.Required("video_id"): str, vol.Optional("screen"): str})
+    parameters = vol.Schema(
+        {
+            vol.Optional("video_id"): str,
+            vol.Optional("number"): vol.All(vol.Coerce(int), vol.Range(min=1, max=MAX_STORIES)),
+            vol.Optional("card"): str,
+            vol.Optional("screen"): str,
+        }
+    )
 
     def __init__(self) -> None:
         if hasattr(llm, "ToolAnnotations"):
@@ -1448,7 +1481,11 @@ class PlayVideoTool(llm.Tool):
 
     async def async_call(self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext) -> Any:
         args = tool_input.tool_args
-        data = await play_video(hass, getattr(llm_context, "device_id", None), args["video_id"], args.get("screen"))
+        if not args.get("video_id") and args.get("number") is None:
+            return _Tool._result({"error": "Give a number or a video_id."}, True)
+        data = await play_video(
+            hass, getattr(llm_context, "device_id", None), args.get("video_id"), args.get("screen"), args.get("number"), args.get("card")
+        )
         return _Tool._result(data, "error" in data)
 
 

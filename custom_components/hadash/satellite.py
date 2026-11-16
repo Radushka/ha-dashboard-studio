@@ -18,6 +18,7 @@ The wake word itself is still heard on the tablet (our wall app); nothing leaves
 from __future__ import annotations
 
 import asyncio
+import collections
 import itertools
 import logging
 import time
@@ -31,6 +32,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar, device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, PRO, SATELLITES, SATELLITES_STORAGE_KEY, VERSION
 
@@ -55,6 +57,10 @@ MANUFACTURER = "Lukaps"
 
 def signal_seen(tablet: str) -> str:
     return SIGNAL_SEEN.format(tablet)
+
+
+# How many heard wake words are kept, for all tablets together.
+HEARD_KEPT = 500
 
 
 class Tablet:
@@ -107,6 +113,8 @@ class Satellites:
         self.played: dict[int, asyncio.Future[None]] = {}
         self._ids = itertools.count(1)
         self.contests: dict[str, Contest] = {}
+        # The last wake words the tablets heard, taken or ignored, with their numbers: for tuning careful mode.
+        self.heard: collections.deque[dict[str, Any]] = collections.deque(maxlen=HEARD_KEPT)
         # Tablets waiting to become satellites: told when the plan changes or Dashboard Studio has started.
         self._listeners: set[Callable[[], None]] = set()
         self._store: Store[dict[str, Any]] = Store(hass, 1, SATELLITES_STORAGE_KEY)
@@ -276,6 +284,8 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_done)
     websocket_api.async_register_command(hass, ws_state)
     websocket_api.async_register_command(hass, ws_watching)
+    websocket_api.async_register_command(hass, ws_heard)
+    websocket_api.async_register_command(hass, ws_heard_list)
 
 
 # A guess of who talks is good for one conversation, not for the rest of the evening.
@@ -491,3 +501,30 @@ def ws_watching(hass: HomeAssistant, connection: websocket_api.ActiveConnection,
     if tablet:
         tablet.watching = msg["title"].strip()
     connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "hadash/satellite/heard",
+        vol.Required("tablet"): str,
+        vol.Required("heard"): {vol.Extra: vol.Any(str, bool, int, float)},
+    }
+)
+@callback
+def ws_heard(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """A tablet heard a wake word, and took it or ignored it (a TV plays): kept with its numbers, for tuning."""
+    satellites: Satellites = hass.data[SATELLITES]
+    tablet = _tablet(hass, msg["tablet"])
+    heard = {k: v for k, v in list(msg["heard"].items())[:16] if not isinstance(v, str) or len(v) <= 60}
+    satellites.heard.append({"at": dt_util.now().isoformat(timespec="seconds"), "tablet": tablet.name if tablet else msg["tablet"][:60], **heard})
+    _LOGGER.debug("Wake word on %s: %s", tablet.name if tablet else "?", heard)
+    connection.send_result(msg["id"])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "hadash/satellite/heard/list"})
+@callback
+def ws_heard_list(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """The wake words the tablets heard since Home Assistant started, the oldest first."""
+    satellites: Satellites = hass.data[SATELLITES]
+    connection.send_result(msg["id"], {"heard": list(satellites.heard)})
