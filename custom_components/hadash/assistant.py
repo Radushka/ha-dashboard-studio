@@ -1232,7 +1232,9 @@ def _screen_prompt(hass: HomeAssistant, llm_context: llm.LLMContext) -> str | No
 VIDEO_PROMPT = (
     "When the person asks to play or watch a video, a channel or something from the Videos card, call "
     "screen_videos, pick the video they mean (the newest one of a channel when they name only the channel), then "
-    "call play_video with its id. It plays on the screen they look at, unless they name another screen. Say only "
+    "call play_video with its id. number is the video's place on the card: 1 is the big video at the top (the "
+    "featured, main or top video), 2 the first row under it, and so on, so the third video is number 3. It plays on the screen they look at, unless "
+    "they name another screen. Say only "
     "a few words about it, since the video starts at once."
 )
 MAX_VIDEOS = 30
@@ -1249,54 +1251,65 @@ def _layout_screens(hass: HomeAssistant) -> list[tuple[str, str, dict[str, Any]]
     return found
 
 
-def _video_feeds(layout: dict[str, Any]) -> list[str]:
-    urls: list[str] = []
-    for w in layout.get("widgets") or []:
-        if isinstance(w, dict) and w.get("type") == "video" and not w.get("hidden"):
-            for f in w.get("feeds") or []:
-                if isinstance(f, dict) and isinstance(f.get("url"), str) and f["url"] not in urls:
-                    urls.append(f["url"])
-    return urls
+# The same as the Videos card (renderer/src/lib/news.svelte.ts, mergeStories): each channel gives a share of
+# the list, so the numbers the assistant uses are the places the person sees on the card.
+PER_FEED = 6
+MAX_STORIES = 24
+
+
+def _video_cards(layout: dict[str, Any]) -> list[tuple[str, list[str]]]:
+    """The Videos cards of one screen, from the top: (name, feed addresses)."""
+    cards = []
+    widgets = sorted(
+        (w for w in layout.get("widgets") or [] if isinstance(w, dict) and w.get("type") == "video" and not w.get("hidden")),
+        key=lambda w: (w.get("y") or 0, w.get("x") or 0),
+    )
+    for w in widgets:
+        urls = [f["url"] for f in w.get("feeds") or [] if isinstance(f, dict) and isinstance(f.get("url"), str)]
+        if urls:
+            cards.append((str(w.get("name") or "Videos"), list(dict.fromkeys(urls))))
+    return cards
 
 
 async def screen_videos(hass: HomeAssistant, device_id: str | None, topic: str | None, limit: int) -> dict[str, Any]:
-    """The videos of the Videos cards on the screen the person looks at, newest first. When that screen has no
-    Videos card, the ones of every screen."""
+    """The videos of the Videos cards on the screen the person looks at, in the card's order (newest first), each
+    with its place on the card. When that screen has no Videos card, the ones of every screen."""
     from .send import video_from
 
     store = hass.data.get(NEWS)
     screens = _layout_screens(hass)
     shown = shown_screen(hass, device_id)
     here = next((s for s in screens if shown and s[0] == shown[0]), None)
-    urls = _video_feeds(here[2]) if here else []
-    if not urls:
-        urls = [u for s in screens for u in _video_feeds(s[2])]
-        urls = list(dict.fromkeys(urls))
-    if store is None or not urls:
+    cards = _video_cards(here[2]) if here else []
+    if not cards:
+        cards = [c for s in screens for c in _video_cards(s[2])]
+    if store is None or not cards:
         return {"videos": [], "note": "There is no Videos card. The person can add one in Dashboard Studio."}
-    feeds = await asyncio.gather(*(store.async_feed(u) for u in urls[:30]))
     words = [w for w in re.findall(r"\w+", (topic or "").lower()) if len(w) > 2]
     now = time.time()
     videos: list[dict[str, Any]] = []
-    for f in feeds:
-        d = f.data or {}
-        if d.get("kind") != "video":
-            continue
-        channel = str(d.get("title") or "YouTube")
-        for item in d.get("items") or []:
-            found = video_from(str(item.get("link") or ""))
-            # Shorts do not play in the Videos card either.
-            if not found or "/shorts/" in str(item.get("link")):
+    for name, urls in cards[:4]:
+        feeds = await asyncio.gather(*(store.async_feed(u) for u in urls[:30]))
+        per = max(PER_FEED, -(-MAX_STORIES // max(1, len(urls))))
+        merged: list[dict[str, Any]] = []
+        for f in feeds:
+            d = f.data or {}
+            channel = str(d.get("title") or "YouTube")
+            mine = []
+            for item in d.get("items") or []:
+                found = video_from(str(item.get("link") or ""))
+                # Shorts are not on the Videos card either.
+                if found and "/shorts/" not in str(item.get("link")):
+                    mine.append({"id": found["id"], "title": str(item.get("title") or ""), "channel": channel,
+                                 "published": item.get("published") or 0})
+            merged += mine[:per]
+        merged.sort(key=lambda v: v["published"], reverse=True)
+        for number, v in enumerate(merged[:MAX_STORIES], 1):
+            if words and not any(w in f"{v['title']} {v['channel']}".lower() for w in words):
                 continue
-            vid = found["id"]
-            title = str(item.get("title") or "")
-            if words and not any(w in f"{title} {channel}".lower() for w in words):
-                continue
-            videos.append({"id": vid, "title": title, "channel": channel, "published": item.get("published") or 0})
-    videos.sort(key=lambda v: v["published"], reverse=True)
-    out = [{**v, "published": _age(v["published"], now)} for v in videos[:limit]]
-    result: dict[str, Any] = {"screen": here[1] if here else None, "videos": out}
-    if not out:
+            videos.append({"card": name, "number": number, **v, "published": _age(v["published"], now)})
+    result: dict[str, Any] = {"screen": here[1] if here else None, "videos": videos[:limit]}
+    if not videos:
         result["note"] = "No video about that right now." if words else "The channels have no videos right now."
     return result
 
@@ -1327,8 +1340,9 @@ class VideosTool(llm.Tool):
 
     name = "screen_videos"
     description = (
-        "The videos on the Videos card of the screen the person looks at, newest first, with title, channel and "
-        "age. topic (optional) keeps only videos whose title or channel mentions it."
+        "The videos on the Videos card of the screen the person looks at, in the card's order, with their number "
+        "on the card (1 is the big one at the top), title, channel and age. topic (optional) keeps only videos "
+        "whose title or channel mentions it; leave it out when the person asks by number."
     )
     integration = DOMAIN
     parameters = vol.Schema(
