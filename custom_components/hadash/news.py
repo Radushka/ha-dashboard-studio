@@ -68,7 +68,31 @@ HEADERS = {
 # These sites closed their open feeds; the studio says so instead of "no feed found".
 CLOSED = ("x.com", "twitter.com", "facebook.com", "instagram.com", "threads.net", "threads.com", "tiktok.com", "linkedin.com")
 
+# News to read aloud when the person asks in another language, and their News cards have no feed in it.
+# The tool reads them all and says the newest stories. A language not here gets the English news, translated.
+# tools/check-feeds.py checks these every week with the popular feeds.
+SPOKEN_FEEDS: dict[str, list[dict[str, str]]] = {
+    "ru": [
+        {"name": "BBC News Русская служба", "url": "https://feeds.bbci.co.uk/russian/rss.xml"},
+        {"name": "Meduza", "url": "https://meduza.io/rss/all"},
+        {"name": "DW на русском", "url": "https://rss.dw.com/xml/rss-ru-all"},
+    ],
+    "fr": [
+        {"name": "Radio-Canada", "url": "https://ici.radio-canada.ca/rss/4159"},
+        {"name": "franceinfo", "url": "https://www.francetvinfo.fr/titres.rss"},
+    ],
+    "de": [
+        {"name": "tagesschau", "url": "https://www.tagesschau.de/xml/rss2/"},
+        {"name": "DW Deutsch", "url": "https://rss.dw.com/xml/rss-de-all"},
+    ],
+    "es": [
+        {"name": "BBC News Mundo", "url": "https://feeds.bbci.co.uk/mundo/rss.xml"},
+        {"name": "El País", "url": "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada"},
+    ],
+}
+
 NS_MEDIA = "http://search.yahoo.com/mrss/"
+XML_LANG = "{http://www.w3.org/XML/1998/namespace}lang"
 NS_ATOM = "http://www.w3.org/2005/Atom"
 NS_CONTENT = "http://purl.org/rss/1.0/modules/content/"
 NS_ITUNES = "http://www.itunes.com/dtds/podcast-1.0.dtd"
@@ -247,6 +271,7 @@ def parse_feed(data: bytes | str, url: str = "") -> dict[str, Any]:
     audio = False
     if rname == "feed":
         title = plain(_kid_text(root, "title"))
+        language = root.get(XML_LANG, "")
         site = ""
         for link in _kids(root, "link"):
             if link.get("rel", "alternate") == "alternate":
@@ -282,6 +307,7 @@ def parse_feed(data: bytes | str, url: str = "") -> dict[str, Any]:
         if channel is None:
             raise ValueError("RSS without a channel")
         title = plain(_kid_text(channel, "title"))
+        language = _kid_text(channel, "language")  # also dc:language
         site = _kid_text(channel, "link", "") or _kid_text(channel, "link")
         img = _kid(channel, "image")
         icon = _kid_text(img, "url") if img is not None else ""
@@ -349,8 +375,16 @@ def parse_feed(data: bytes | str, url: str = "") -> dict[str, Any]:
         "site": urljoin(url, site) if site else "",
         "icon": urljoin(url, icon) if icon else "",
         "kind": kind,
+        # The feed's own language ("ru", "fr"), so a voice answer in that language can find it. "" when not said.
+        "language": language_code(language),
         "items": stories,
     }
+
+
+def language_code(text: str | None) -> str:
+    """The two or three letter language of "ru-RU", "fr_CA" or "en"; "" when there is none."""
+    code = (text or "").strip().replace("_", "-").split("-")[0].lower()
+    return code if re.fullmatch(r"[a-z]{2,3}", code) else ""
 
 
 # ---------------------------------------------------------------- YouTube without its feed
