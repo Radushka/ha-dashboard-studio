@@ -1370,10 +1370,10 @@ async def play_video(
 WATCHING_PROMPT = (
     'A video plays on this screen now: "{title}". Keep every answer to one short sentence, so the video can go '
     "on; give more only when the person asks for it. To work the video (pause, resume, stop, next, previous, "
-    "skip, louder, quieter, full screen, autoplay), call video_control and say nothing more than a word or two."
+    "skip, louder, quieter, full screen, autoplay, captions), call video_control and say nothing more than a word or two."
 )
 VIDEO_ACTIONS = ["pause", "resume", "stop", "next", "previous", "restart", "skip", "louder", "quieter", "mute", "unmute",
-                 "full_screen", "exit_full_screen", "autoplay_on", "autoplay_off"]
+                 "full_screen", "exit_full_screen", "autoplay_on", "autoplay_off", "captions_on", "captions_off"]
 
 
 def _watching_prompt(hass: HomeAssistant, llm_context: llm.LLMContext) -> str | None:
@@ -1411,7 +1411,8 @@ class VideoControlTool(llm.Tool):
         "Work the video that plays on the screen the person looks at. action: pause, resume (also continues the "
         "last video where it stopped), stop (closes it and remembers the place), next, previous, restart, skip "
         "(seconds: forward, or negative to go back; 30 when left out), louder, quieter, mute, unmute, "
-        "full_screen, exit_full_screen, autoplay_on, autoplay_off (whether the next video starts by itself)."
+        "full_screen, exit_full_screen, autoplay_on, autoplay_off (whether the next video starts by itself), "
+        "captions_on, captions_off (subtitles on the picture)."
     )
     integration = DOMAIN
     parameters = vol.Schema(

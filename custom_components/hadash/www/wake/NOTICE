@@ -32,3 +32,6 @@ only material that allows commercial use:
   arXiv:1510.08484.
 - Simulated room impulse responses from OpenSLR RIRS_NOISES (Apache License
   2.0), Ko et al., ICASSP 2017.
+- Russian YouTube speech from YODAS (CC BY 3.0; videos their creators
+  licensed CC BY), Li et al., "YODAS: YouTube-Oriented Dataset for Audio and
+  Speech", ASRU 2023, https://huggingface.co/datasets/espnet/yodas

@@ -7,9 +7,9 @@
   "trained_languages": ["ru"],
   "version": 2,
   "micro": {
-    "probability_cutoff": 0.97,
+    "probability_cutoff": 0.995,
     "feature_step_size": 10,
-    "sliding_window_size": 5,
+    "sliding_window_size": 7,
     "tensor_arena_size": 48000,
     "minimum_esphome_version": "2024.7.0"
   }

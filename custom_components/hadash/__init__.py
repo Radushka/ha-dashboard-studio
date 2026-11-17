@@ -40,6 +40,7 @@ from .hello import async_register as async_register_hello
 from .throw import async_register as async_register_throw
 from .spots import SpotStore
 from .voice import async_register as async_register_voice
+from .stopping import async_register_stopping
 from .websocket import async_register_commands
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,6 +60,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     await hass.data[PRO].async_load()
     hass.data[PRO].async_start()
     async_register_commands(hass)
+    # Restarts and updates: the screens hear that Home Assistant stops, and show a calm picture until it is back.
+    async_register_stopping(hass)
     # Auto-update (off until turned on in the studio): a quiet look once a night.
     hass.data[AUTO] = AutoUpdater(hass)
     await hass.data[AUTO].async_load()
