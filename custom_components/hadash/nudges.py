@@ -149,7 +149,8 @@ class Nudges:
         def stop(_event: Event) -> None:
             self.stop()
 
-        self._unsubs.append(self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, stop))
+        # Kept out of _unsubs: a one-time listener removes itself when it runs, and removing it again logs an error.
+        self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, stop)
 
     def stop(self) -> None:
         if self._timer:
