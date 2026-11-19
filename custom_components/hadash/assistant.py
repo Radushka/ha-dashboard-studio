@@ -56,9 +56,9 @@ SINGLE: dict[str, tuple[str, ...]] = {
 }
 OPTIONAL_ENTITY = {"energy": ("sensor",)}
 HOUSE = ("scenes", "doors", "shades", "family", "air", "calendar", "timer", "logbook", "smart", "home", "note",
-         "photo", "webpage", "network", "custom")
+         "photo", "webpage", "network", "custom", "lights")
 TYPES = {"room", *SINGLE, *OPTIONAL_ENTITY, *HOUSE}
-MENU_TYPES = {"climate", "media", "weather", "status", "shades", "family", "scenes", "voice"}
+MENU_TYPES = {"climate", "media", "weather", "status", "shades", "family", "scenes", "voice", "video", "news"}
 LOOKS = {
     "aurora": ("classic", "northern", "sunset", "slate"),
     "monochrome": ("black", "graphite"),
@@ -125,7 +125,7 @@ tint, accent, pulse, dim, hide}].
 Colors are "#rrggbb".
 
 Side menu: layout.menu is a list of {type, entity, label, name}. type is climate (entity), media (entity),
-weather (entity, a weather.* entity), status, shades, family, scenes or voice. menuSide: "left" or "right".
+weather (entity, a weather.* entity), status, shades, family, scenes, voice, video (all videos of the Videos cards) or news (all stories of the News cards). menuSide: "left" or "right".
 Header: headerEntity (usually an outdoor temperature) and header {hidden, align "split"|"left"|"center"}.
 
 House look (in the main layout, screen ""): theme.look and theme.lookOption.
