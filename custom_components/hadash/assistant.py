@@ -121,7 +121,8 @@ Whole-house cards (optional "entities" limits them to those ids; without it they
 
 Optional on any card: style {accent, tint, tintStrength 0-1, glass "clear"|"frosted"|"solid"|"none", radius,
 text}, showWhen {entity, state, not}, rules [{entity, is "on"|"off"|"above"|"below"|"equals"|"not", value,
-tint, accent, pulse, dim, hide}].
+tint, accent, pulse, dim, hide, chime "bell"|"knock"|"soon"}]. chime plays once on that tablet when the rule starts
+to match (not 10 PM to 7 AM); a rule with only a chime does not change the look.
 Colors are "#rrggbb".
 
 Side menu: layout.menu is a list of {type, entity, label, name}. type is climate (entity), media (entity),
