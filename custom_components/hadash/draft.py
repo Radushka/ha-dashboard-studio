@@ -46,7 +46,7 @@ class DraftStore:
         return None
 
     def public(self) -> dict[str, Any]:
-        return {k: self.data.get(k) for k in ("project", "base", "change", "by", "note", "updated")}
+        return {k: self.data.get(k) for k in ("project", "base", "change", "by", "note", "spot", "updated")}
 
     def save_from_studio(self, project: dict[str, Any], base: int, seen: int) -> bool:
         """The studio's own change. Refused when the assistant changed the draft after the studio last looked."""
@@ -63,14 +63,15 @@ class DraftStore:
         self._store.async_delay_save(lambda: self.data, 2)
         return True
 
-    def save_from_assistant(self, project: dict[str, Any], base: int, note: str) -> dict[str, Any]:
-        """A change by the assistant. Every open studio gets it at once."""
+    def save_from_assistant(self, project: dict[str, Any], base: int, note: str, spot: str | None = None) -> dict[str, Any]:
+        """A change by the assistant. Every open studio gets it at once. spot names a setting the studio shows."""
         self.data = {
             "project": project,
             "base": base,
             "change": self.change + 1,
             "by": BY_ASSISTANT,
             "note": note,
+            "spot": spot,
             "updated": dt_util.utcnow().isoformat(),
         }
         self._store.async_delay_save(lambda: self.data, 1)

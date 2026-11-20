@@ -32,6 +32,7 @@ from homeassistant.helpers import llm
 from .const import DOMAIN, DRAFT, NEWS, PRO, WWW
 from .draft import DraftStore
 from .layout import LayoutStore
+from . import settings as studio_settings
 
 API_ID = DOMAIN
 API_NAME = "Dashboard Studio"
@@ -88,7 +89,11 @@ Rules:
 6. Good design: few cards, each with room to breathe. Group a room's lights in one room card. Put the
    thermostat, weather and media in the side menu when the screen is small (Fire 7 is 1024 x 600).
 7. After a change, tell the user in one or two short sentences what you changed, and that they can press
-   Publish in the studio, or Undo."""
+   Publish in the studio, or Undo.
+8. Dashboard Studio has its own settings too, such as Morning hello, Screensaver, Rest and wake, Text size,
+   Wake word or Language. When the user names something that is not a card or a device, or says it is a
+   setting, call dashboard_find_setting before you say it does not exist, then dashboard_change_setting.
+   Use the setting's real name in your answer. When nothing fits, offer the closest names it gives you."""
 
 CARD_TYPES = """Card types. Every card has type, x, y, w, h (grid cells, starting at 1) and an optional name.
 With grid.auto true (the default), cards flow left to right in list order and wrap; x and y are then only an
@@ -491,6 +496,84 @@ def set_screen_look(hass: HomeAssistant, screen: str, look: str, option: str | N
     return {"saved": True, "next": "The studio preview shows it now. The tablets change only after Publish."}
 
 
+# ---------- Studio settings by name ----------
+
+
+def _setting_layout(project: dict[str, Any], screen: str, scope: str) -> dict[str, Any]:
+    """Where a setting lives: the main layout for the whole house, the screen for its own values."""
+    if scope == "house" or not screen:
+        return project
+    entry = next((s for s in project.get("screens") or [] if s.get("id") == screen), None)
+    if scope == "look" and not (entry and entry.get("ownLook")):
+        return project
+    return screen_of(project, screen)
+
+
+def _describe_setting(s: studio_settings.Setting, layout: dict[str, Any] | None) -> dict[str, Any]:
+    out: dict[str, Any] = {"name": s.name, "where": s.where, "can_change": s.changeable}
+    if s.changeable and layout is not None:
+        out["value"] = studio_settings.read(s, layout)
+        out["for"] = {"house": "every screen", "look": "the look", "screen": "this screen"}[s.scope]
+        if s.kind == "switch":
+            out["values"] = "on or off"
+        elif s.kind == "choice":
+            out["values"] = list(s.choices.values())
+        elif s.kind == "size":
+            out["values"] = f"{round(s.low * 100)}% to {round(s.high * 100)}%"
+        elif s.kind == "number":
+            out["values"] = f"{s.low:g} to {s.high:g}"
+        elif s.kind == "color":
+            out["values"] = "#rrggbb"
+    if s.note:
+        out["note"] = s.note
+    elif not s.changeable:
+        out["note"] = f"Tell the user to open it in the studio: {s.where}."
+    return out
+
+
+def find_setting(hass: HomeAssistant, text: str, screen: str) -> dict[str, Any]:
+    project, _ = working_project(hass)
+    screen_of(project, screen)  # an unknown screen is a clear problem
+    found = studio_settings.find(text)
+    if not found:
+        near = studio_settings.closest(text)
+        return {
+            "settings": [],
+            "did_you_mean": near,
+            "next": "No setting has that name. Offer the names in did_you_mean, or ask what it should do."
+            if near else "No setting has that name. Ask the user what it should do.",
+        }
+    return {"settings": [_describe_setting(s, _setting_layout(project, screen, s.scope)) for s in found]}
+
+
+def change_setting(hass: HomeAssistant, name: str, value: Any, screen: str) -> dict[str, Any]:
+    _pro_or_raise(hass)
+    s = studio_settings.by_name(name)
+    if s is None:
+        near = studio_settings.closest(name)
+        raise AssistantProblem(f"No setting is called {name}." + (f" Did you mean: {', '.join(near)}?" if near else ""))
+    if not s.changeable:
+        raise AssistantProblem(f"{s.name} cannot be changed by talking. {s.note or 'Tell the user to open it in the studio: ' + s.where + '.'}")
+    project, revision = working_project(hass)
+    screen_of(project, screen)
+    layout = _setting_layout(project, screen, s.scope)
+    try:
+        parsed = studio_settings.parse(s, value)
+        before = studio_settings.read(s, layout)
+        studio_settings.write(s, layout, parsed)
+    except studio_settings.SettingProblem as err:
+        raise AssistantProblem(str(err)) from err
+    now = studio_settings.read(s, layout)
+    if now == before:
+        return {"saved": False, "name": s.name, "value": now, "where": s.where, "next": f"{s.name} was already {now}. Nothing changed."}
+    summary = f"{s.name} is now {now}."
+    hass.data[DRAFT].save_from_assistant(project, revision, summary, spot=s.name)
+    return {
+        "saved": True, "name": s.name, "value": now, "where": s.where,
+        "next": "The studio opens this setting and shows it now. The tablets change only after Publish.",
+    }
+
+
 # ---------- The LLM API ----------
 
 
@@ -620,6 +703,35 @@ class SetScreenLookTool(_Tool):
 
     def run(self, hass, args):
         return set_screen_look(hass, args.get("screen", ""), args["look"], args.get("option"))
+
+
+class FindSettingTool(_Tool):
+    name = "dashboard_find_setting"
+    description = (
+        "Find Dashboard Studio's own settings by the name the user says (Morning hello, Screensaver, Text size, "
+        "Wake word, Rest and wake…): where each is in the studio, its value now, and what it can be. "
+        'screen is the screen whose values to read ("" is the main layout).'
+    )
+    parameters = vol.Schema({vol.Required("text"): str, vol.Optional("screen", default=""): str})
+
+    def run(self, hass, args):
+        return find_setting(hass, args["text"], args.get("screen", ""))
+
+
+class ChangeSettingTool(_Tool):
+    name = "dashboard_change_setting"
+    description = (
+        "Change one Dashboard Studio setting by its name from dashboard_find_setting. value is on or off for a "
+        'switch, one of the choices, a size such as "120%", a number or a color. "default" puts it back. '
+        'screen is the screen to change ("" is the main layout); house settings change every screen.'
+    )
+    read_only = False
+    parameters = vol.Schema(
+        {vol.Required("name"): str, vol.Required("value"): vol.Any(str, bool, int, float), vol.Optional("screen", default=""): str}
+    )
+
+    def run(self, hass, args):
+        return change_setting(hass, args["name"], args["value"], args.get("screen", ""))
 
 
 # ---------- News, for anyone who asks (a voice speaker has no user)
@@ -1529,7 +1641,7 @@ class DashboardStudioAPI(llm.API):
             prompt = f"{prompt}\n\n{SPEAKER_PROMPT.format(name=speaker)}"
         if await _is_admin(self.hass, llm_context):
             tools += [OverviewTool(), CardTypesTool(), FindDevicesTool(), GetScreenTool(), SaveScreenTool(),
-                      AddScreenTool(), SetScreenLookTool()]
+                      AddScreenTool(), SetScreenLookTool(), FindSettingTool(), ChangeSettingTool()]
             prompt = f"{PROMPT}\n\n{prompt}"
         return llm.APIInstance(api=self, api_prompt=prompt, llm_context=llm_context, tools=tools)
 
