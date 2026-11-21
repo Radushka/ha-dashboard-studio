@@ -237,6 +237,7 @@ class TvStore:
     """The TVs set up from the studio: {host: {name, model, screen, version}}, so the studio can list them."""
 
     def __init__(self, hass: HomeAssistant) -> None:
+        self._hass = hass
         self._store: Store[dict[str, Any]] = Store(hass, 1, TVS_STORAGE_KEY)
         self.tvs: dict[str, dict[str, Any]] = {}
 
@@ -249,8 +250,12 @@ class TvStore:
         return tv.get("name", "") if tv is not None else None
 
     async def async_save_tv(self, host: str, info: dict[str, Any]) -> None:
+        from homeassistant.helpers.dispatcher import async_dispatcher_send
+
         self.tvs[host] = info
         await self._store.async_save({"tvs": self.tvs})
+        # Its Home Assistant player (media_player.py) joins at once.
+        async_dispatcher_send(self._hass, f"{DOMAIN}_tv_added", host)
 
     async def async_remove(self, host: str) -> None:
         if self.tvs.pop(host, None) is not None:

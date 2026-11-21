@@ -99,6 +99,8 @@ class FireTvLink:
         self._device: Any = None
         self._lock = asyncio.Lock()
         self._listeners: set[Callable[[dict[str, Any]], None]] = set()
+        # Hear every change without asking for the fast reading (the TV's Home Assistant player).
+        self._observers: set[Callable[[dict[str, Any]], None]] = set()
         self._poll: asyncio.Task[None] | None = None
         self._used = time.monotonic()
         self.now: dict[str, Any] = {"reachable": None}
@@ -169,6 +171,14 @@ class FireTvLink:
 
         return stop
 
+    def observe(self, send: Callable[[dict[str, Any]], None]) -> Callable[[], None]:
+        self._observers.add(send)
+        return lambda: self._observers.discard(send)
+
+    def share(self, now: dict[str, Any]) -> None:
+        """A reading made elsewhere (the player's own round), for the tiles that listen."""
+        self._tell(now)
+
     async def refresh(self) -> None:
         """Reads at once (after a key), so the tile shows the change without waiting for the next round."""
         self._tell(await self.read_now())
@@ -177,7 +187,7 @@ class FireTvLink:
         if now == self.now:
             return
         self.now = now
-        for send in list(self._listeners):
+        for send in [*self._listeners, *self._observers]:
             send(now)
 
     async def _run(self) -> None:
@@ -331,7 +341,12 @@ def tv_choices(hass: HomeAssistant, layouts: list[dict[str, Any]]) -> list[dict[
             if isinstance(w, dict) and w.get("type") == "tv" and isinstance(w.get("entity"), str) and w["entity"]:
                 found.setdefault(w["entity"], {"id": w["entity"], "name": w.get("name"), "sound": w.get("sound"), "tile": True})
     for state in hass.states.async_all("media_player"):
-        if state.attributes.get("device_class") == "tv" or _platform(hass, state.entity_id) in TV_PLATFORMS:
+        host = state.attributes.get("firetv_host")
+        if host:
+            # A Fire TV's own player (media_player.py): the same TV as "firetv:<address>", worked over its link.
+            tv = found.setdefault(f"firetv:{host}", {"id": f"firetv:{host}", "name": None, "sound": None, "tile": False})
+            tv["player"] = state.entity_id
+        elif state.attributes.get("device_class") == "tv" or _platform(hass, state.entity_id) in TV_PLATFORMS:
             found.setdefault(state.entity_id, {"id": state.entity_id, "name": None, "sound": None, "tile": False})
     for tv in found.values():
         if tv["id"].startswith("firetv:"):
@@ -357,10 +372,10 @@ def pick_tv(
     if len(shown) == 1:
         return shown[0]
     pool = shown or choices
-    playing = [c for c in pool if not c["id"].startswith("firetv:") and getattr(hass.states.get(c["id"]), "state", "") == "playing"]
+    playing = [c for c in pool if getattr(hass.states.get(c.get("player") or c["id"]), "state", "") == "playing"]
     if playing:
         return playing[0]
-    close = [c for c in pool if c["id"] in (near or [])]
+    close = [c for c in pool if c["id"] in (near or []) or c.get("player") in (near or [])]
     if close:
         return close[0]
     return pool[0] if len(pool) == 1 else (shown[0] if shown else None)

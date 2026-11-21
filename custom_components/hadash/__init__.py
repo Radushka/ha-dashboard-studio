@@ -47,7 +47,7 @@ _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 # Wall tablets as Assist satellites (Pro): one device per tablet, with its satellite and its two voice settings.
 # Guest mode (free): one switch for the whole house (switch.py).
-PLATFORMS = [Platform.ASSIST_SATELLITE, Platform.SELECT, Platform.SWITCH]
+PLATFORMS = [Platform.ASSIST_SATELLITE, Platform.MEDIA_PLAYER, Platform.SELECT, Platform.SWITCH]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
