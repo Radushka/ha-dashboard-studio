@@ -29,6 +29,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.storage import Store
 
 from .const import PHOTO_VIEW, SPOTS, SPOTS_STORAGE_KEY, STORAGE_VERSION
+from .icloud_album import ALBUM_PREFIX
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -299,7 +300,7 @@ async def ws_photo_spot(hass: HomeAssistant, connection: websocket_api.ActiveCon
     media_id = msg["media"]
     store: SpotStore | None = hass.data.get(SPOTS)
     view = hass.data.get(PHOTO_VIEW)
-    if store is None or view is None or not media_id.startswith("media-source://"):
+    if store is None or view is None or not media_id.startswith(("media-source://", ALBUM_PREFIX)):
         connection.send_result(msg["id"], None)
         return
     found = store.get(media_id)

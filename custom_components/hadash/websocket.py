@@ -14,6 +14,7 @@ from .assistant import conversation_agents
 from .const import DOMAIN, DRAFT, PRO
 from .draft import DraftStore
 from .firetv import ws_tv_find, ws_tv_forget, ws_tv_setup, ws_tv_update_app
+from .tvremote import ws_tv_key, ws_tv_remotes, ws_tv_watch
 from .layout import LayoutStore
 from .license import LicenseProblem, ProManager
 from .photos import ws_photos
@@ -56,6 +57,9 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_tv_setup)
     websocket_api.async_register_command(hass, ws_tv_forget)
     websocket_api.async_register_command(hass, ws_tv_update_app)
+    websocket_api.async_register_command(hass, ws_tv_remotes)
+    websocket_api.async_register_command(hass, ws_tv_watch)
+    websocket_api.async_register_command(hass, ws_tv_key)
     websocket_api.async_register_command(hass, ws_voice_check)
     websocket_api.async_register_command(hass, ws_voice_check_apply)
     websocket_api.async_register_command(hass, ws_voice_check_undo)

@@ -27,6 +27,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import SPOTS
+from .icloud_album import ALBUM_PREFIX, albums, is_album_link
 from .photo_info import PhotoInfo
 
 _LOGGER = logging.getLogger(__name__)
@@ -198,6 +199,10 @@ def _shrink(data: bytes, width: int, height: int) -> bytes:
 
 async def _photo(hass: HomeAssistant, media_id: str, width: int, height: int) -> bytes:
     """The photo at the screen's size. HEIC from Synology comes as Synology's own JPEG copy."""
+    if media_id.startswith(ALBUM_PREFIX):
+        # Apple already gives JPEG copies of the album's photos, HEIC ones included.
+        original = await albums(hass).async_photo(hass, media_id)
+        return await hass.async_add_executor_job(_shrink, original, width, height)
     if _is_heif(media_id):
         preview = await _synology_preview(hass, media_id)
         if preview:
@@ -211,6 +216,11 @@ async def _photo(hass: HomeAssistant, media_id: str, width: int, height: int) ->
         if not preview:
             raise
         return await hass.async_add_executor_job(_shrink, preview, width, height)
+
+
+def is_photo_id(media_id: str) -> bool:
+    """A photo from Media, or from an Apple Shared Album."""
+    return media_id.startswith(("media-source://", ALBUM_PREFIX))
 
 
 class PhotoView(HomeAssistantView):
@@ -252,7 +262,7 @@ class PhotoView(HomeAssistantView):
             height = max(64, min(MAX_SIDE, int(request.query.get("h", "800"))))
         except ValueError:
             return web.Response(status=400)
-        if not media_id.startswith("media-source://"):
+        if not is_photo_id(media_id):
             return web.Response(status=400)
         try:
             body = await self.async_copy(hass, media_id, width, height)
@@ -272,7 +282,19 @@ class PhotoView(HomeAssistantView):
 )
 @websocket_api.async_response
 async def ws_photos(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
-    """The photos of a Media folder or album, each with a signed address of a copy at the screen's size."""
+    """The photos of a Media folder or album, or of an Apple Shared Album (its link), each with a signed
+    address of a copy at the screen's size."""
+    if is_album_link(msg["media"]):
+        try:
+            # Apple gives each photo's date and caption with the list.
+            title, photos = await albums(hass).async_list(hass, msg["media"])
+        except Exception as err:  # noqa: BLE001 - a wrong link, Public Website off, or no internet
+            _LOGGER.debug("Shared Album %s failed: %s", msg["media"], err)
+            connection.send_error(msg["id"], "not_found", f"Could not open the album: {err}")
+            return
+        _sign(hass, photos, msg)
+        connection.send_result(msg["id"], {"title": title, "photos": photos})
+        return
     try:
         title, photos = await async_list_photos(hass, msg["media"])
     except Exception as err:  # noqa: BLE001 - a folder that is gone or a source that is offline
@@ -284,7 +306,12 @@ async def ws_photos(hass: HomeAssistant, connection: websocket_api.ActiveConnect
         await info.add_facts(hass, photos)
     except Exception as err:  # noqa: BLE001 - the photos still show without their line
         _LOGGER.debug("Photo facts failed: %s", err)
+    _sign(hass, photos, msg)
+    connection.send_result(msg["id"], {"title": title, "photos": photos})
+
+
+def _sign(hass: HomeAssistant, photos: list[dict[str, str]], msg: dict[str, Any]) -> None:
+    """Each photo's id becomes a signed address of its copy at the screen's size."""
     size = f"&w={msg['width']}&h={msg['height']}"
     for p in photos:
         p["url"] = async_sign_path(hass, f"{PHOTO_URL}?id={quote(p.pop('id'), safe='')}{size}", SIGN_FOR)
-    connection.send_result(msg["id"], {"title": title, "photos": photos})

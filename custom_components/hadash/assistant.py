@@ -32,6 +32,7 @@ from homeassistant.helpers import llm
 from .const import DOMAIN, DRAFT, NEWS, PRO, WWW
 from .draft import DraftStore
 from .layout import LayoutStore
+from .tvremote import VOICE_ACTIONS as TV_ACTIONS
 from . import settings as studio_settings
 
 API_ID = DOMAIN
@@ -46,6 +47,7 @@ SINGLE: dict[str, tuple[str, ...]] = {
     "light": ("light",),
     "climate": ("climate",),
     "media": ("media_player",),
+    "tv": ("media_player",),
     "camera": ("camera",),
     "graph": ("sensor",),
     "forecast": ("weather",),
@@ -104,6 +106,9 @@ Cards about one device ("entity" is required, of the kinds given):
 - light: one light (light). climate: a thermostat dial (climate). media: a player (media_player);
   music: "record" (a turntable), "sleeve" (the record slides out of its cover) or "notes" (big song title);
   without it, the classic player card.
+- tv: a TV and whatever app plays on it, with a big pause and a touch pad remote (media_player of a TV, or
+  "firetv:<address>" for a Fire TV set up with Add a Fire TV); sound: the player for the volume (a sound bar);
+  doorPause: true pauses the TV when someone rings the doorbell (Pro).
 - camera: a camera (camera); live: "tap" | "always" | "never".
 - graph: a sensor history line (sensor); hours: 24. gauge: a ring (sensor); min, max,
   levels: {warn, alert, high}.
@@ -334,7 +339,10 @@ def check_layout(hass: HomeAssistant, layout: Any, main: bool, own_look: bool = 
         elif w["w"] > grid["columns"]:
             errors.append(f"{where}: w is wider than the grid ({grid['columns']} columns).")
         entity = w.get("entity")
-        if kind in SINGLE or (kind in OPTIONAL_ENTITY and entity):
+        # A Fire TV set up with "Add a Fire TV" works through Dashboard Studio itself: "firetv:<address>".
+        if kind == "tv" and isinstance(entity, str) and entity.startswith("firetv:"):
+            pass
+        elif kind in SINGLE or (kind in OPTIONAL_ENTITY and entity):
             domains = SINGLE.get(kind) or OPTIONAL_ENTITY[kind]
             if not known(entity):
                 errors.append(f"{where}: entity {entity!r} does not exist. Find one with dashboard_find_devices.")
@@ -1546,6 +1554,104 @@ class VideoControlTool(llm.Tool):
         return _Tool._result(data, "error" in data)
 
 
+TV_PROMPT = (
+    "The TV itself and its apps (Netflix, YouTube, Apple TV, Prime Video...) are worked with tv_control: pause, "
+    "resume, skip (seconds, negative to go back), louder, quieter, mute, unmute, turn_on, turn_off, home, back, "
+    "show_remote (opens the TV's touch pad remote on the tablet the person talks to). "
+    "Use video_control only for a video in the dashboard's own player. Leave tv out unless the person names a TV; "
+    "then the TV tile of their screen, or the TV that plays, is used. Answer with a word or two."
+)
+
+
+async def tv_control(hass: HomeAssistant, device_id: str | None, action: str, tv: str | None, seconds: int | None) -> dict[str, Any]:
+    """Works a TV (any app on it): the TV named, else the TV tile on the screen the person looks at, else the one that plays."""
+    from .tvremote import pick_tv, tv_choices, tv_do
+
+    screens = _layout_screens(hass)
+    shown = shown_screen(hass, device_id)
+    here_layout = next((s[2] for s in screens if shown and s[0] == shown[0]), None)
+    here = [str(w.get("entity")) for w in (here_layout or {}).get("widgets") or [] if isinstance(w, dict) and w.get("type") == "tv"]
+    layouts = [s[2] for s in screens]
+    choices = tv_choices(hass, [here_layout, *layouts] if here_layout else layouts)
+    if not choices:
+        return {"error": "There is no TV in Home Assistant or on a TV tile."}
+    chosen = pick_tv(hass, choices, here, tv, _tvs_near(hass, device_id))
+    if chosen is None:
+        return {"error": "Which TV?", "tvs": [c["name"] for c in choices]}
+    if action == "show_remote":
+        return await _show_remote(hass, device_id, chosen)
+    try:
+        said = await tv_do(hass, chosen, action, seconds)
+    except ValueError as err:
+        return {"error": str(err), "tv": chosen["name"]}
+    except HomeAssistantError as err:
+        return {"error": f"The TV did not take it: {err}", "tv": chosen["name"]}
+    return {"result": said, "tv": chosen["name"]}
+
+
+def _tvs_near(hass: HomeAssistant, device_id: str | None) -> list[str]:
+    """The TVs in the same room as the tablet or speaker the person talks to."""
+    from homeassistant.helpers import device_registry as dr, entity_registry as er
+
+    device = dr.async_get(hass).async_get(device_id) if device_id else None
+    if device is None or not device.area_id:
+        return []
+    devices = dr.async_get(hass)
+    near = []
+    for entry in er.async_get(hass).entities.values():
+        if entry.domain != "media_player":
+            continue
+        area = entry.area_id or (getattr(devices.async_get(entry.device_id), "area_id", None) if entry.device_id else None)
+        if area == device.area_id:
+            near.append(entry.entity_id)
+    return near
+
+
+async def _show_remote(hass: HomeAssistant, device_id: str | None, chosen: dict[str, Any]) -> dict[str, Any]:
+    """Opens the TV's remote on the screen the person looks at; the page says how it went."""
+    from .send import SEND
+    from .voice import VOICE
+
+    shown = shown_screen(hass, device_id)
+    voice = hass.data.get(VOICE)
+    sender = hass.data.get(SEND)
+    walls = [w for w in voice.walls.values() if shown and w.connection == shown[1]] if voice else []
+    if not walls or sender is None:
+        return {"error": "This device shows no screen to open the remote on.", "tv": chosen["name"]}
+    command = {"action": "tv_remote", "entity": chosen["id"], "sound": chosen.get("sound")}
+    said = await sender._deliver_command(voice, walls, command)  # noqa: SLF001
+    return {"result": said or "The screen did not answer.", "tv": chosen["name"]}
+
+
+class TvControlTool(llm.Tool):
+    """Pause, skip and volume for any app on a TV, in any language. For everyone, like the other video tools."""
+
+    name = "tv_control"
+    description = (
+        "Work a TV and whatever app plays on it (Netflix, YouTube, Apple TV, Prime Video...). action: pause, resume, "
+        "skip (seconds: forward, or negative to go back; 30 when left out), louder, quieter, mute, unmute, "
+        "turn_on, turn_off, home (the TV's home screen), back, show_remote (opens the TV's touch pad remote on the "
+        "screen the person talks to). tv (optional): the TV's name when the person names one."
+    )
+    integration = DOMAIN
+    parameters = vol.Schema(
+        {
+            vol.Required("action"): vol.In(TV_ACTIONS),
+            vol.Optional("tv"): str,
+            vol.Optional("seconds"): vol.All(vol.Coerce(int), vol.Range(min=-10800, max=10800)),
+        }
+    )
+
+    def __init__(self) -> None:
+        if hasattr(llm, "ToolAnnotations"):
+            self.annotations = llm.ToolAnnotations(read_only=False, destructive=False, idempotent=False, open_world=False)
+
+    async def async_call(self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext) -> Any:
+        args = tool_input.tool_args
+        data = await tv_control(hass, getattr(llm_context, "device_id", None), args["action"], args.get("tv"), args.get("seconds"))
+        return _Tool._result(data, "error" in data)
+
+
 class VideosTool(llm.Tool):
     """The videos of the Videos cards, to play one by voice. Read only, and for anyone (a tablet has no admin)."""
 
@@ -1627,8 +1733,8 @@ class DashboardStudioAPI(llm.API):
 
     async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
         tools: list[llm.Tool] = [NewsTool(), WeatherTool(), ReadingsTool(), HistoryTool(), BriefingTool(),
-                                 VideosTool(), PlayVideoTool(), VideoControlTool()]
-        prompt = f"{NEWS_PROMPT}\n\n{WEATHER_PROMPT}\n\n{HISTORY_PROMPT}\n\n{BRIEFING_PROMPT}\n\n{VIDEO_PROMPT}"
+                                 VideosTool(), PlayVideoTool(), VideoControlTool(), TvControlTool()]
+        prompt = f"{NEWS_PROMPT}\n\n{WEATHER_PROMPT}\n\n{HISTORY_PROMPT}\n\n{BRIEFING_PROMPT}\n\n{VIDEO_PROMPT}\n\n{TV_PROMPT}"
         # Who is talking to a wall tablet: the person in front of it, or the only person at home.
         if where := _tablet_prompt(self.hass, llm_context):
             prompt = f"{prompt}\n\n{where}"
