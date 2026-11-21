@@ -122,8 +122,10 @@ SETTINGS: list[Setting] = [
     _s("Card corners", "Sizes", "round radius corners", path=("theme", "radius"), kind="number", default=28, low=0, high=48),
     _s("Back to the main screen", "Back to the main screen", "timeout close view return home idle", path=("viewClose",), kind="choice",
        default="60", choices={"30": "30 s", "60": "1 min", "120": "2 min", "300": "5 min", "0": "Never"}),
-    _s("Screensaver", "Screensaver", "saver idle clock photos slideshow picture frame", path=("screensaver",), kind="choice", default="off",
-       choices={"off": "Off", "clock": "Clock"}, note="Photos need photos chosen in the Studio, so only Off and Clock can be set here."),
+    _s("Screensaver", "Screensaver", "saver idle clock photos slideshow picture frame cards cycle rotate turns full screen", path=("screensaver",), kind="choice", default="off",
+       choices={"off": "Off", "clock": "Clock"}, note="Photos and Cards need photos or cards chosen in the Studio, so only Off and Clock can be set here."),
+    _s("Cards take turns", "Screensaver", "saver cards cycle rotate turns full screen weather news cameras idle kiosk"),
+    _saver("Someone at a camera comes first", "personFirst", "saver cards camera person front doorbell", pro="moments"),
     _s("Clock style", "Screensaver", "saver clock face", pro="clocks"),
     _saver("Slow drift", "drift", "saver zoom pan ken burns"),
     _saver("On this day", "memories", "memories years ago saver photos", default=False, pro="moments"),
@@ -322,7 +324,8 @@ def read(s: Setting, layout: dict[str, Any]) -> Any:
     if s.path == ("screensaver",):
         if not raw:
             return "Off"
-        return f"Photos, after {raw.get('minutes', 5)} min" if "photos" in raw or "media" in raw else f"Clock, after {raw.get('minutes', 5)} min"
+        kind = "Cards" if "cards" in raw else "Photos" if "photos" in raw or "media" in raw or "album" in raw else "Clock"
+        return f"{kind}, after {raw.get('minutes', 5)} min"
     if raw is None:
         raw = s.default
     if s.kind == "choice":
