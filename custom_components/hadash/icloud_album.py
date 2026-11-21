@@ -118,6 +118,23 @@ def _best_checksum(derivatives: dict[str, Any]) -> str | None:
     return max(fits)[1] if fits else min(sizes)[1]
 
 
+# Videos in an album are left out; their poster frame is not a photo to show.
+VIDEO_KINDS = ("movie", "video", "mpeg", "avi", "m4v")
+# CloudKit keeps several sizes of each photo. The medium JPEG (2048 pixels) is the best fit for a screen; a
+# small photo may only have its original (shown when it is a JPEG or PNG), and the thumbnail is the last choice.
+CK_SIZES = ("resJPEGMedRes", "resJPEGFullRes", "resOriginalRes", "resJPEGThumbRes")
+
+
+def _ck_address(fields: dict[str, Any], kind: str) -> str | None:
+    for name in CK_SIZES:
+        if name == "resOriginalRes" and not any(k in kind for k in ("jpeg", "jpg", "png")):
+            continue
+        value = (fields.get(name) or {}).get("value")
+        if isinstance(value, dict) and value.get("downloadURL"):
+            return str(value["downloadURL"])
+    return None
+
+
 @dataclass
 class _Album:
     host: str
@@ -191,7 +208,11 @@ class SharedAlbums:
         dates: dict[str, str] = {}  # master: taken
         order: list[str] = []
         rank = 0
-        while len(order) < MAX_PHOTOS:
+        # A page that adds nothing new ends the list, so an answer that repeats itself can never loop.
+        for _ in range(MAX_PHOTOS // 50):
+            if len(order) >= MAX_PHOTOS:
+                break
+            known = len(order) + len(masters)
             body = {
                 "query": {
                     "recordType": "CPLAssetAndMasterByAssetDateWithoutHiddenOrDeleted",
@@ -219,11 +240,12 @@ class SharedAlbums:
                         order.append(master)
                 elif r.get("recordType") == "CPLMaster":
                     kind = str((fields.get("itemType") or {}).get("value") or "")
-                    res_ = (fields.get("resJPEGMedRes") or fields.get("resJPEGFullRes") or {}).get("value") or {}
-                    link = res_.get("downloadURL")
-                    if link and "video" not in kind and "movie" not in kind:
-                        masters[str(r.get("recordName"))] = (str(link).replace("${f}", "photo.jpg"), kind)
-            if not assets or len(records) < CK_PAGE:
+                    if any(v in kind for v in VIDEO_KINDS):
+                        continue
+                    link = _ck_address(fields, kind)
+                    if link:
+                        masters[str(r.get("recordName"))] = (link.replace("${f}", "photo.jpg"), kind)
+            if not assets or len(records) < CK_PAGE or len(order) + len(masters) == known:
                 break
             rank += assets
         now = time.monotonic()
