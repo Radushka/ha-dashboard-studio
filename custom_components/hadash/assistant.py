@@ -61,7 +61,7 @@ OPTIONAL_ENTITY = {"energy": ("sensor",)}
 HOUSE = ("scenes", "doors", "shades", "family", "air", "calendar", "timer", "logbook", "smart", "home", "note",
          "photo", "webpage", "network", "custom", "lights")
 TYPES = {"room", *SINGLE, *OPTIONAL_ENTITY, *HOUSE}
-MENU_TYPES = {"climate", "media", "weather", "status", "shades", "family", "scenes", "voice", "video", "news", "checkup", "cameras"}
+MENU_TYPES = {"climate", "media", "weather", "status", "shades", "family", "scenes", "voice", "video", "news", "checkup", "cameras", "tv", "rooms"}
 LOOKS = {
     "aurora": ("classic", "northern", "sunset", "slate"),
     "monochrome": ("black", "graphite"),

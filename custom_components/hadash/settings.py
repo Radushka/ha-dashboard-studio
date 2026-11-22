@@ -209,7 +209,11 @@ SETTINGS: list[Setting] = [
     _s("Coming up", "Cards", "coming up soon due bins garbage recycling reminder upcoming calendar to-do todo battery batteries checkup line tile",
        tab="screen", note="A line tile, card type comingup (its settings in soon). Place it with dashboard_save_screen."),
     _s("News line", "Cards", "news line ticker headlines bottom crawl feed scroll tile",
-       tab="screen", note="A line tile, card type newsline (seconds per headline in seconds). Place it with dashboard_save_screen."),
+       tab="screen", note="A line tile, card type newsline (seconds per headline in seconds). Place it with dashboard_save_screen; band \"top\" or \"bottom\" runs it across the whole width above the clock or under the cards."),
+    _s("News line across the top", "Cards", "news line ticker band top bottom full width across coming up line tile", tab="screen",
+       note="A line tile's band: \"top\" (above the clock) or \"bottom\" (under the cards), across the whole width. Coming up can be a band too."),
+    _s("Videos that play by themselves", "Cards", "youtube video autoplay auto play channel muted quiet", tab="screen",
+       note="A Videos card's autoplay value (true): the newest video plays on the card with no sound while the screen is awake."),
     _s("Photo frame", "Cards", "photo frame apple icloud iphone mac shared album iphoto media synology immich uploads on this day", tab="screen",
        note="A photo card's source: photos (uploads), media {id, title} or album {url, title} (an Apple Shared Album link with Public Website on); memories for On this day."),
     _s("Style, rules and gestures", "Cards", "tint rules long press double tap gestures card style font color", tab="screen",
@@ -233,6 +237,8 @@ SETTINGS: list[Setting] = [
     _s("Side of the screen", "Side menu", "menu left right side", tab="menu", path=("menuSide",), kind="choice", default="left",
        choices={"left": "Left", "right": "Right"}),
     _s("Side menu", "Buttons", "menu buttons views navigation", tab="menu", note="The menu list; use dashboard_save_screen."),
+    _s("Rooms button", "Buttons", "rooms floors home menu button areas plan", tab="menu",
+       note="A menu item of type rooms: it opens the floors and rooms page on the floor where the lights are on."),
     _s("Home model", "Home model", "home model floor plan rooms 3d house", tab="home", pro="home"),
 ]
 
