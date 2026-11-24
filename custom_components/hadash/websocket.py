@@ -9,6 +9,7 @@ import voluptuous as vol
 
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.network import NoURLAvailableError, get_url
 
 from .assistant import conversation_agents
 from .const import DOMAIN, DRAFT, PRO
@@ -63,6 +64,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_voice_check)
     websocket_api.async_register_command(hass, ws_voice_check_apply)
     websocket_api.async_register_command(hass, ws_voice_check_undo)
+    websocket_api.async_register_command(hass, ws_secure_url)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "hadash/layout"})
@@ -126,6 +128,22 @@ def ws_version(hass: HomeAssistant, connection: websocket_api.ActiveConnection, 
         connection.send_error(msg["id"], "not_found", "That version is no longer kept.")
         return
     connection.send_result(msg["id"], version)
+
+
+def secure_url(hass: HomeAssistant) -> str | None:
+    """This Home Assistant's https address away from home: its own external one, else Home Assistant Cloud's."""
+    try:
+        return get_url(hass, allow_internal=False, allow_ip=False, require_ssl=True, require_standard_port=True, allow_cloud=True)
+    except NoURLAvailableError:
+        return None
+
+
+@websocket_api.websocket_command({vol.Required("type"): "hadash/secure_url"})
+@callback
+def ws_secure_url(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """{url}: browsers allow the microphone only on https, so a page opened at http offers this address to talk.
+    Any signed-in user: a phone often has a non-admin login."""
+    connection.send_result(msg["id"], {"url": secure_url(hass)})
 
 
 @websocket_api.require_admin

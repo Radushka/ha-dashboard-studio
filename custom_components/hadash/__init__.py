@@ -18,6 +18,7 @@ from homeassistant.helpers import device_registry as dr
 
 from .alarms import async_setup as async_setup_alarms
 from .intercom import async_setup as async_setup_intercom
+from .gestures import async_setup as async_setup_gestures
 from .nudges import async_setup as async_setup_nudges
 from .safety import async_setup as async_setup_safety
 from .phones import async_setup as async_setup_phones
@@ -93,6 +94,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     await async_setup_reminders(hass)
     await async_setup_phones(hass)
     await async_setup_intercom(hass)
+    # Hand gestures (Pro): a camera next to a TV, the hand tracker on the Mac, the dashboard of that place answers.
+    await async_setup_gestures(hass)
     await async_setup_nudges(hass)
     await async_setup_safety(hass)
     # Throw it to the TV (Pro): a card flicked up on a tablet opens on a TV.
