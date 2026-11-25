@@ -33,7 +33,7 @@ from homeassistant.components import websocket_api
 from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.core import Event, HomeAssistant, callback
 
-from .const import PRO, SATELLITES, TVS
+from .const import DOMAIN, PRO, SATELLITES, TVS
 
 EARS = "hadash_ears"
 # The most sound one message may carry (a quarter of a second is about 11 kB as base64).
@@ -79,11 +79,22 @@ class Ears:
             return None
         return next((tv for tv in reversed(self.tvs.get(tablet, [])) if tv.visible), None)
 
-    def firetv_of(self, tv: TvSide) -> str | None:
-        """The Fire TV that shows this TV page (set up with "Add a Fire TV"), by its address."""
+    def firetv_of(self, screen: str) -> str | None:
+        """The Fire TV that shows this screen (set up with "Add a Fire TV"), by its address."""
         store = self.hass.data.get(TVS)
         tvs: dict[str, dict[str, Any]] = getattr(store, "tvs", {}) or {}
-        return next((host for host, info in tvs.items() if tv.screen and info.get("screen") == tv.screen), None)
+        return next((host for host, info in tvs.items() if screen and info.get("screen") == screen), None)
+
+    def picked_by(self, tablet: str) -> list[tuple[str, str]]:
+        """The screens (id, name) that picked this tablet under "Listen with" in the published layout. A TV in
+        another app has no dashboard page that could say so, for example right after Home Assistant restarts."""
+        layout = getattr(self.hass.data.get(DOMAIN), "layout", None) or {}
+        found = []
+        for screen in layout.get("screens", []) if isinstance(layout, dict) else []:
+            voice = screen.get("voice") if isinstance(screen, dict) else None
+            if isinstance(voice, dict) and voice.get("ears") == tablet and screen.get("id"):
+                found.append((str(screen["id"]), str(screen.get("name") or screen["id"])))
+        return found
 
     def awake(self, host: str) -> bool:
         """The Fire TV is on (its media player in Home Assistant), whatever app is in front."""
@@ -99,12 +110,11 @@ class Ears:
         sides = list(reversed(self.tvs.get(tablet, [])))
         tv = next((t for t in sides if t.visible), None)
         if tv is not None:
-            host = self.firetv_of(tv)
-            return {"screen": tv.screen, "name": tv.name, "dashboard": True, "firetv": host}
-        for t in sides:
-            host = self.firetv_of(t)
+            return {"screen": tv.screen, "name": tv.name, "dashboard": True, "firetv": self.firetv_of(tv.screen)}
+        for screen, name in [*((t.screen, t.name) for t in sides), *self.picked_by(tablet)]:
+            host = self.firetv_of(screen)
             if host and self.awake(host):
-                return {"screen": t.screen, "name": t.name, "dashboard": False, "firetv": host}
+                return {"screen": screen, "name": name, "dashboard": False, "firetv": host}
         return None
 
     @callback
@@ -166,6 +176,10 @@ class Ears:
 def async_register(hass: HomeAssistant) -> None:
     ears = hass.data[EARS] = Ears(hass)
     hass.data[PRO].async_listen(lambda *_: ears.changed_all())
+    # A new "Listen with" pick in the studio: the tablets learn what to watch at once.
+    layouts = hass.data.get(DOMAIN)
+    if layouts is not None and hasattr(layouts, "async_listen"):
+        layouts.async_listen(lambda *_: ears.changed_all())
 
     @callback
     def fire_tv_changed(event: Event) -> None:
