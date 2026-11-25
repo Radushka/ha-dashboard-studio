@@ -91,7 +91,11 @@ class Ears:
         layout = getattr(self.hass.data.get(DOMAIN), "layout", None) or {}
         found = []
         for screen in layout.get("screens", []) if isinstance(layout, dict) else []:
-            voice = screen.get("voice") if isinstance(screen, dict) else None
+            if not isinstance(screen, dict):
+                continue
+            # Each extra screen keeps its settings in its own "layout"; an older one kept them on the screen itself.
+            inner = screen.get("layout") if isinstance(screen.get("layout"), dict) else {}
+            voice = inner.get("voice") or screen.get("voice")
             if isinstance(voice, dict) and voice.get("ears") == tablet and screen.get("id"):
                 found.append((str(screen["id"]), str(screen.get("name") or screen["id"])))
         return found
