@@ -22,6 +22,8 @@ SPOTS_STORAGE_KEY = "hadash.photo_spots"
 # Home on TV: the Fire TVs set up from the studio (firetv.py).
 TVS = "hadash_tvs"
 TVS_STORAGE_KEY = "hadash.tvs"
+# Doorstep watch: our own package monitor for the cameras with an area marked in the studio (doorstep.py).
+DOORSTEP = "hadash_doorstep"
 # News: read feeds and their pictures, in memory (news.py).
 NEWS = "hadash_news"
 

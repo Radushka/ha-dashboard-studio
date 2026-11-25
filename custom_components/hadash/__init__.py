@@ -15,6 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.const import Platform
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.start import async_at_started
 
 from .alarms import async_setup as async_setup_alarms
 from .intercom import async_setup as async_setup_intercom
@@ -26,7 +27,8 @@ from .reminders import async_setup as async_setup_reminders
 from .timed import async_setup as async_setup_timed
 from .assistant import async_register as async_register_assistant
 from .autoupdate import AutoUpdater
-from .const import AUTO, DOMAIN, DRAFT, PANEL, PHOTO_VIEW, PRO, SATELLITES, SPOTS, TVS, URL_BASE, VERSION, WWW
+from .const import AUTO, DOMAIN, DOORSTEP, DRAFT, PANEL, PHOTO_VIEW, PRO, SATELLITES, SPOTS, TVS, URL_BASE, VERSION, WWW
+from .doorstep import DoorstepWatch
 from .draft import DraftStore
 from .ears import async_register as async_register_ears
 from .firetv import TvStore
@@ -49,7 +51,7 @@ _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 # Wall tablets as Assist satellites (Pro): one device per tablet, with its satellite and its two voice settings.
 # Guest mode (free): one switch for the whole house (switch.py).
-PLATFORMS = [Platform.ASSIST_SATELLITE, Platform.MEDIA_PLAYER, Platform.SELECT, Platform.SWITCH]
+PLATFORMS = [Platform.ASSIST_SATELLITE, Platform.BINARY_SENSOR, Platform.MEDIA_PLAYER, Platform.SELECT, Platform.SWITCH]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -101,6 +103,15 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     await async_setup_gestures(hass)
     await async_setup_nudges(hass)
     await async_setup_safety(hass)
+    # Doorstep watch: our own package monitor, for cameras with an area marked in the studio. It starts once the
+    # cameras are up, and looks only after a person leaves.
+    hass.data[DOORSTEP] = DoorstepWatch(hass)
+
+    async def start_doorstep(_hass: HomeAssistant) -> None:
+        stop = hass.data[DOORSTEP].async_start()
+        hass.bus.async_listen_once("homeassistant_stop", lambda _e: stop())
+
+    async_at_started(hass, start_doorstep)
     # Throw it to the TV (Pro): a card flicked up on a tablet opens on a TV.
     async_register_throw(hass)
     # A tablet as a TV's ears (Pro): the tablet next to the TV hears, the TV listens, shows and answers.
