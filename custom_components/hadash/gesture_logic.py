@@ -79,6 +79,7 @@ class Settings:
     point_repeat_after: float = 1.2  # a finger held pointing steps again after this long ...
     point_repeat: float = 0.9  # ... and then this often (Radu, 24 Nov: 0.6 s "moves really fast")
     vertical: bool = True  # swipe up and down too (off: only left and right)
+    swipes: bool = True  # a moving hand swipes (off: only a pointing finger moves, as for a TV in another app)
     airtap: bool = False  # Air tap: the open hand moves the glow over the screen, the OK sign taps (no swipes)
     pointer: bool = False  # Air tap's Pointer style: the screen shows the live hand, and the tap hits what is under it
     reach: float = 0.25  # in Air tap, moving the hand this far from where it woke reaches the screen's edge
@@ -239,7 +240,7 @@ class GestureReader:
             tap = self._pinch(now, hand)
             if tap:
                 return tap
-        else:
+        elif s.swipes:
             got = self._path(now, hand.x, hand.y)
             if got or self._down_at is not None:
                 return got

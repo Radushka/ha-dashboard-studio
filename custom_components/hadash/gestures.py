@@ -14,6 +14,7 @@ says "ready", and again after a key that may change it, so a gesture never waits
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -23,6 +24,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 
+_LOGGER = logging.getLogger(__name__)
 GESTURES_KEY = "hadash_gestures"
 EVENT = "hadash_gesture"
 GESTURES = {"ready", "gone", "aim", "left", "right", "up", "down", "ok", "back", "playpause", "volume_up", "volume_down"}
@@ -212,8 +214,18 @@ class HandSession:
 
         self.hass, self.target, self.style, self.firetv = hass, target, style, firetv
         # A tablet on the wall sees the person a little farther and lower than the Mac's own camera.
-        self.reader = GestureReader(Settings(airtap=style != "steps", pointer=style == "pointer", min_size=0.06, max_y=1.0))
+        # Steps on a wall tablet (a TV in another app, like YouTube): only a pointing finger moves, one step per point,
+        # and a held point steps again only slowly. A swipe would also count the arm going down (Radu, 24 Nov 2026:
+        # one point gave four steps, lowering the hand three more).
+        steps = style == "steps"
+        self.reader = GestureReader(Settings(
+            airtap=not steps, pointer=style == "pointer", min_size=0.06, max_y=1.0,
+            swipes=not steps, point_repeat_after=2.0 if steps else Settings.point_repeat_after,
+            point_repeat=1.2 if steps else Settings.point_repeat,
+        ))
         self.aim_sent: tuple[float, float] | None = None
+        # The gestures of this picture, for the tablet to answer with a soft sound (the TV may show another app).
+        self.fired: list[str] = []
 
     def fire(self, gesture: str, extra: dict[str, Any] | None = None) -> None:
         data: dict[str, Any] = {"where": self.target, "gesture": gesture, **(extra or {})}
@@ -222,6 +234,9 @@ class HandSession:
         if gesture == "ready":
             data["seconds"] = self.reader.settings.listen
             data["style"] = self.style
+        if gesture != "aim":
+            _LOGGER.debug("Tablet hands for %s: %s", self.target, gesture)
+            self.fired.append(gesture)
         self.hass.bus.async_fire(EVENT, data)
 
     def look(self, now: float, hands: list) -> None:
@@ -289,5 +304,6 @@ def ws_hands(hass: HomeAssistant, connection: websocket_api.ActiveConnection, ms
         pts = item["pts"]
         points = [(min(1.5, max(-0.5, pts[i])), min(1.5, max(-0.5, pts[i + 1]))) for i in range(0, 42, 2)]
         hands.append(hand_of(points, item["shape"], item["score"], w, h))
+    session.fired = []
     session.look(msg["t"] / 1000 if "t" in msg else time.monotonic(), hands)
-    connection.send_result(msg["id"], {"listening": session.reader.listening})
+    connection.send_result(msg["id"], {"listening": session.reader.listening, "fired": session.fired})
