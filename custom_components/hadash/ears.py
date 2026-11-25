@@ -15,6 +15,10 @@ Over the same websocket as everything else:
 6. "hadash/ears/state": what the TV does now (thinks, speaks, its words), so the tablet can show a calm sign of it.
 7. "hadash/ears/stop": a tap on the tablet stops the talk on the TV.
 8. "hadash/ears/tablets": the studio's list of tablets that can listen.
+
+The same tablet is also the TV's eyes (hand gestures, custom_components/hadash/gestures.py): the tablet hears
+"eyes" with the TV to watch for. While the TV shows the dashboard, the hand works the dashboard. While another app
+is in front of a Fire TV that is awake (YouTube, Netflix), the hand works that app like the remote.
 """
 
 from __future__ import annotations
@@ -26,9 +30,10 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.components import websocket_api
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import EVENT_STATE_CHANGED
+from homeassistant.core import Event, HomeAssistant, callback
 
-from .const import PRO, SATELLITES
+from .const import PRO, SATELLITES, TVS
 
 EARS = "hadash_ears"
 # The most sound one message may carry (a quarter of a second is about 11 kB as base64).
@@ -61,6 +66,8 @@ class Ears:
         self.open: dict[str, TvSide] = {}
         # Each TV page by its connection and tablet, so its later commands find it.
         self.by_connection: dict[tuple[int, str], TvSide] = {}
+        # What each tablet was last told to watch for, so a Fire TV going on or off tells it only once.
+        self.eyes_sent: dict[str, dict[str, Any] | None] = {}
 
     @property
     def pro(self) -> bool:
@@ -72,6 +79,34 @@ class Ears:
             return None
         return next((tv for tv in reversed(self.tvs.get(tablet, [])) if tv.visible), None)
 
+    def firetv_of(self, tv: TvSide) -> str | None:
+        """The Fire TV that shows this TV page (set up with "Add a Fire TV"), by its address."""
+        store = self.hass.data.get(TVS)
+        tvs: dict[str, dict[str, Any]] = getattr(store, "tvs", {}) or {}
+        return next((host for host, info in tvs.items() if tv.screen and info.get("screen") == tv.screen), None)
+
+    def awake(self, host: str) -> bool:
+        """The Fire TV is on (its media player in Home Assistant), whatever app is in front."""
+        for state in self.hass.states.async_all("media_player"):
+            if state.attributes.get("firetv_host") == host:
+                return state.state not in ("off", "standby", "unavailable", "unknown")
+        return False
+
+    def eyes_for(self, tablet: str) -> dict[str, Any] | None:
+        """The TV this tablet watches hands for now: its dashboard on the screen, or another app on its Fire TV."""
+        if not self.pro:
+            return None
+        sides = list(reversed(self.tvs.get(tablet, [])))
+        tv = next((t for t in sides if t.visible), None)
+        if tv is not None:
+            host = self.firetv_of(tv)
+            return {"screen": tv.screen, "name": tv.name, "dashboard": True, "firetv": host}
+        for t in sides:
+            host = self.firetv_of(t)
+            if host and self.awake(host):
+                return {"screen": t.screen, "name": t.name, "dashboard": False, "firetv": host}
+        return None
+
     @callback
     def changed(self, tablet: str) -> None:
         """Tells the tablet and its TVs what they need to know about each other."""
@@ -79,6 +114,10 @@ class Ears:
         tv = self.tv_for(tablet)
         if side is not None:
             side.send({"action": "tv", "tv": {"screen": tv.screen, "name": tv.name} if tv else None})
+            eyes = self.eyes_for(tablet)
+            if eyes != self.eyes_sent.get(tablet):
+                self.eyes_sent[tablet] = eyes
+                side.send({"action": "eyes", "tv": eyes})
         for each in self.tvs.get(tablet, []):
             each.send({"action": "tablet", "on": side is not None and self.pro, "name": side.name if side else ""})
         if tablet in self.open and self.open[tablet] is not tv:
@@ -127,6 +166,21 @@ class Ears:
 def async_register(hass: HomeAssistant) -> None:
     ears = hass.data[EARS] = Ears(hass)
     hass.data[PRO].async_listen(lambda *_: ears.changed_all())
+
+    @callback
+    def fire_tv_changed(event: Event) -> None:
+        # A Fire TV went on or off: its tablet starts or stops watching for hands while another app is in front.
+        new, old = event.data.get("new_state"), event.data.get("old_state")
+        if not ears.tablets or not any(s is not None and s.attributes.get("firetv_host") for s in (new, old)):
+            return
+        if (new.state if new else None) != (old.state if old else None):
+            ears.changed_all()
+
+    hass.bus.async_listen(
+        EVENT_STATE_CHANGED,
+        fire_tv_changed,
+        event_filter=callback(lambda data: str(data.get("entity_id", "")).startswith("media_player.")),
+    )
     for command in (ws_tablet, ws_tv, ws_seen, ws_wake, ws_audio, ws_open, ws_close, ws_state, ws_stop, ws_tablets):
         websocket_api.async_register_command(hass, command)
 
@@ -148,6 +202,7 @@ def ws_tablet(hass: HomeAssistant, connection: websocket_api.ActiveConnection, m
         connection.send_message(websocket_api.event_message(msg["id"], command))
 
     side = ears.tablets[tablet] = TabletSide(msg["name"].strip(), send)
+    ears.eyes_sent.pop(tablet, None)
 
     @callback
     def gone() -> None:
