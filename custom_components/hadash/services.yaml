@@ -1,0 +1,53 @@
+show_note:
+  fields:
+    message:
+      required: true
+      example: "The garage is still open"
+      selector:
+        text:
+    title:
+      example: "Garage"
+      selector:
+        text:
+    id:
+      example: "garage_open"
+      selector:
+        text:
+    until_entity:
+      example: "cover.garage_door"
+      selector:
+        entity:
+    until_state:
+      example: "closed"
+      selector:
+        text:
+    minutes:
+      example: 30
+      selector:
+        number:
+          min: 1
+          max: 1440
+          unit_of_measurement: min
+clear_note:
+  fields:
+    id:
+      required: true
+      example: "garage_open"
+      selector:
+        text:
+turn_on_for:
+  fields:
+    entity_id:
+      required: true
+      example: "switch.towel_heater"
+      selector:
+        entity:
+          domain: [switch, input_boolean, fan, light, valve, humidifier]
+    minutes:
+      required: true
+      example: 30
+      selector:
+        number:
+          min: 1
+          max: 720
+          unit_of_measurement: min

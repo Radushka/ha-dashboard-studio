@@ -16,5 +16,61 @@
         }
       }
     }
+  },
+  "services": {
+    "show_note": {
+      "name": "Notiz an der Wand zeigen",
+      "description": "Zeigt eine kurze Notiz auf jedem Dashboard-Studio-Tablet. Sie kann von selbst gehen, wenn ihr Grund endet.",
+      "fields": {
+        "message": {
+          "name": "Nachricht",
+          "description": "Der Text der Notiz, zum Beispiel „Die Garage ist noch offen“."
+        },
+        "title": {
+          "name": "Titel",
+          "description": "Ein kleines Wort über der Nachricht, zum Beispiel „Garage“. Leer lassen für „Zuhause“."
+        },
+        "id": {
+          "name": "ID",
+          "description": "Ein Name für die Notiz, damit eine spätere Aktion sie ändern oder entfernen kann."
+        },
+        "until_entity": {
+          "name": "Bis zu diesem Gerät",
+          "description": "Die Notiz geht, wenn dieses Gerät den Zustand unten erreicht, oder sich ändert, wenn kein Zustand angegeben ist."
+        },
+        "until_state": {
+          "name": "Bis zu diesem Zustand",
+          "description": "Zum Beispiel closed, locked oder off."
+        },
+        "minutes": {
+          "name": "Für Minuten",
+          "description": "Die Notiz geht nach so vielen Minuten."
+        }
+      }
+    },
+    "clear_note": {
+      "name": "Notiz entfernen",
+      "description": "Entfernt eine Notiz von jedem Tablet.",
+      "fields": {
+        "id": {
+          "name": "ID",
+          "description": "Die ID aus Notiz an der Wand zeigen."
+        }
+      }
+    },
+    "turn_on_for": {
+      "name": "Eine Weile einschalten",
+      "description": "Schaltet ein Gerät ein, und Home Assistant schaltet es nach den Minuten aus. Von Hand ausschalten beendet die Zeit.",
+      "fields": {
+        "entity_id": {
+          "name": "Gerät",
+          "description": "Ein Schalter, Ventilator, Licht, Ventil oder Luftbefeuchter."
+        },
+        "minutes": {
+          "name": "Minuten",
+          "description": "Wie lange es an bleibt."
+        }
+      }
+    }
   }
 }

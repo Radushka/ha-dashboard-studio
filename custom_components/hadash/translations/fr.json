@@ -16,5 +16,61 @@
         }
       }
     }
+  },
+  "services": {
+    "show_note": {
+      "name": "Afficher une note au mur",
+      "description": "Affiche une courte note sur chaque tablette Dashboard Studio. Elle peut partir d’elle-même quand sa raison se termine.",
+      "fields": {
+        "message": {
+          "name": "Message",
+          "description": "Les mots de la note, par exemple « Le garage est encore ouvert »."
+        },
+        "title": {
+          "name": "Titre",
+          "description": "Un petit mot au-dessus du message, par exemple « Garage ». Laissez vide pour « Maison »."
+        },
+        "id": {
+          "name": "ID",
+          "description": "Un nom pour la note, pour qu’une action plus tard puisse la changer ou l’enlever."
+        },
+        "until_entity": {
+          "name": "Jusqu’à cet appareil",
+          "description": "La note part quand cet appareil atteint l’état ci-dessous, ou change si aucun état n’est donné."
+        },
+        "until_state": {
+          "name": "Jusqu’à cet état",
+          "description": "Par exemple closed, locked ou off."
+        },
+        "minutes": {
+          "name": "Pendant des minutes",
+          "description": "La note part après ce nombre de minutes."
+        }
+      }
+    },
+    "clear_note": {
+      "name": "Enlever une note",
+      "description": "Enlève une note de chaque tablette.",
+      "fields": {
+        "id": {
+          "name": "ID",
+          "description": "L’ID donné dans Afficher une note au mur."
+        }
+      }
+    },
+    "turn_on_for": {
+      "name": "Allumer un moment",
+      "description": "Allume un appareil, et Home Assistant l’éteint après les minutes. L’éteindre à la main termine le temps.",
+      "fields": {
+        "entity_id": {
+          "name": "Appareil",
+          "description": "Un interrupteur, ventilateur, lumière, vanne ou humidificateur."
+        },
+        "minutes": {
+          "name": "Minutes",
+          "description": "Combien de temps il reste allumé."
+        }
+      }
+    }
   }
 }

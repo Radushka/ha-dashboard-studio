@@ -27,5 +27,61 @@
         }
       }
     }
+  },
+  "services": {
+    "show_note": {
+      "name": "Show a note on the wall",
+      "description": "Shows a short note on every Dashboard Studio tablet. It can go away by itself when its reason ends.",
+      "fields": {
+        "message": {
+          "name": "Message",
+          "description": "The words on the note, such as \"The garage is still open\"."
+        },
+        "title": {
+          "name": "Title",
+          "description": "A small word above the message, such as \"Garage\". Leave it empty for \"Home\"."
+        },
+        "id": {
+          "name": "ID",
+          "description": "A name for the note, so a later action can change it or take it away."
+        },
+        "until_entity": {
+          "name": "Until this device",
+          "description": "The note goes away when this device reaches the state below, or changes when no state is given."
+        },
+        "until_state": {
+          "name": "Until this state",
+          "description": "For example closed, locked or off."
+        },
+        "minutes": {
+          "name": "For minutes",
+          "description": "The note goes away after this many minutes."
+        }
+      }
+    },
+    "clear_note": {
+      "name": "Take a note away",
+      "description": "Takes a note away from every tablet.",
+      "fields": {
+        "id": {
+          "name": "ID",
+          "description": "The ID given in Show a note on the wall."
+        }
+      }
+    },
+    "turn_on_for": {
+      "name": "Turn on for a while",
+      "description": "Turns a device on, and Home Assistant turns it off after the minutes. Turning it off by hand ends the time.",
+      "fields": {
+        "entity_id": {
+          "name": "Device",
+          "description": "A switch, fan, light, valve or humidifier."
+        },
+        "minutes": {
+          "name": "Minutes",
+          "description": "How long it stays on."
+        }
+      }
+    }
   }
 }

@@ -1,0 +1,7 @@
+{
+  "services": {
+    "show_note": { "service": "mdi:note-text-outline" },
+    "clear_note": { "service": "mdi:note-remove-outline" },
+    "turn_on_for": { "service": "mdi:timer-outline" }
+  }
+}

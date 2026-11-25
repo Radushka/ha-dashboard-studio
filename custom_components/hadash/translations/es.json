@@ -16,5 +16,61 @@
         }
       }
     }
+  },
+  "services": {
+    "show_note": {
+      "name": "Mostrar una nota en la pared",
+      "description": "Muestra una nota corta en cada tablet de Dashboard Studio. Puede irse sola cuando termina su motivo.",
+      "fields": {
+        "message": {
+          "name": "Mensaje",
+          "description": "Las palabras de la nota, por ejemplo «El garaje sigue abierto»."
+        },
+        "title": {
+          "name": "Título",
+          "description": "Una palabra pequeña sobre el mensaje, por ejemplo «Garaje». Déjelo vacío para «Casa»."
+        },
+        "id": {
+          "name": "ID",
+          "description": "Un nombre para la nota, para que una acción posterior pueda cambiarla o quitarla."
+        },
+        "until_entity": {
+          "name": "Hasta este dispositivo",
+          "description": "La nota se va cuando este dispositivo llega al estado de abajo, o cambia si no se da un estado."
+        },
+        "until_state": {
+          "name": "Hasta este estado",
+          "description": "Por ejemplo closed, locked u off."
+        },
+        "minutes": {
+          "name": "Durante minutos",
+          "description": "La nota se va después de estos minutos."
+        }
+      }
+    },
+    "clear_note": {
+      "name": "Quitar una nota",
+      "description": "Quita una nota de cada tablet.",
+      "fields": {
+        "id": {
+          "name": "ID",
+          "description": "El ID dado en Mostrar una nota en la pared."
+        }
+      }
+    },
+    "turn_on_for": {
+      "name": "Encender un rato",
+      "description": "Enciende un dispositivo, y Home Assistant lo apaga después de los minutos. Apagarlo a mano termina el tiempo.",
+      "fields": {
+        "entity_id": {
+          "name": "Dispositivo",
+          "description": "Un interruptor, ventilador, luz, válvula o humidificador."
+        },
+        "minutes": {
+          "name": "Minutos",
+          "description": "Cuánto tiempo sigue encendido."
+        }
+      }
+    }
   }
 }

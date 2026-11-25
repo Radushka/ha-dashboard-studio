@@ -23,6 +23,7 @@ from .nudges import async_setup as async_setup_nudges
 from .safety import async_setup as async_setup_safety
 from .phones import async_setup as async_setup_phones
 from .reminders import async_setup as async_setup_reminders
+from .timed import async_setup as async_setup_timed
 from .assistant import async_register as async_register_assistant
 from .autoupdate import AutoUpdater
 from .const import AUTO, DOMAIN, DRAFT, PANEL, PHOTO_VIEW, PRO, SATELLITES, SPOTS, TVS, URL_BASE, VERSION, WWW
@@ -92,6 +93,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     await async_setup_alarms(hass)
     await async_setup_reminders(hass)
+    # On for a while: a heater or a pump on for some minutes, turned off here (free).
+    await async_setup_timed(hass)
     await async_setup_phones(hass)
     await async_setup_intercom(hass)
     # Hand gestures (Pro): a camera next to a TV, the hand tracker on the Mac, the dashboard of that place answers.
