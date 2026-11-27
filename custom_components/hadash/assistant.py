@@ -104,7 +104,8 @@ grid.columns is usually 12. grid.rows is how many rows fill the screen height.
 
 Cards about one device ("entity" is required, of the kinds given):
 - light: one light (light). climate: a thermostat dial (climate). media: a player (media_player);
-  music: "record" (a turntable), "sleeve" (the record slides out of its cover) or "notes" (big song title);
+  music: "record" (a turntable), "sleeve" (the record slides out of its cover), "notes" (big song title)
+  or "living" (the cover moves softly and its colors glow);
   without it, the classic player card.
 - tv: a TV and whatever app plays on it, with a big pause and a touch pad remote (media_player of a TV, or
   "firetv:<address>" for a Fire TV set up with Add a Fire TV); sound: the player for the volume (a sound bar);
@@ -1556,16 +1557,36 @@ class VideoControlTool(llm.Tool):
 
 TV_PROMPT = (
     "The TV itself and its apps (Netflix, YouTube, Apple TV, Prime Video...) are worked with tv_control: pause, "
-    "resume, skip (seconds, negative to go back), louder, quieter, mute, unmute, turn_on, turn_off, home, back, "
-    "show_remote (opens the TV's touch pad remote on the tablet the person talks to). "
+    "resume, skip (seconds, negative to go back), louder, quieter, volume (level 0 to 100), mute, unmute, turn_on, "
+    "turn_off, home, back, show_remote (opens the TV's touch pad remote on the tablet the person talks to). "
     "Use video_control only for a video in the dashboard's own player. Leave tv out unless the person names a TV; "
-    "then the TV tile of their screen, or the TV that plays, is used. Answer with a word or two."
+    "then the TV tile of their screen, or the TV that plays, is used. A volume word without a TV name (louder, "
+    "quieter, volume 30, mute) also goes to tv_control with tv left out: it changes the music or speaker that plays "
+    "in the person's room, and the TV only when nothing else plays there. Answer with a word or two."
 )
 
 
-async def tv_control(hass: HomeAssistant, device_id: str | None, action: str, tv: str | None, seconds: int | None) -> dict[str, Any]:
-    """Works a TV (any app on it): the TV named, else the TV tile on the screen the person looks at, else the one that plays."""
+VOLUME_ACTIONS = ("louder", "quieter", "volume", "mute", "unmute")
+
+
+async def tv_control(
+    hass: HomeAssistant, device_id: str | None, action: str, tv: str | None, seconds: int | None, level: int | None = None
+) -> dict[str, Any]:
+    """Works a TV (any app on it): the TV named, else the TV tile on the screen the person looks at, else the one that plays.
+    The volume goes first to what plays in the person's room (music on the kitchen Bose), when no TV is named."""
+    from .room_sound import area_of_device, change, name_of, playing_here
     from .tvremote import pick_tv, tv_choices, tv_do
+
+    if action in VOLUME_ACTIONS and not tv:
+        players = playing_here(hass, area_of_device(hass, device_id), device_id)
+        if players:
+            if action == "volume" and level is None:
+                return {"error": "Say a volume from 0 to 100."}
+            try:
+                await change(hass, players, action, level)
+            except HomeAssistantError as err:
+                return {"error": f"The speaker did not take it: {err}", "player": name_of(hass, players)}
+            return {"result": "Done.", "player": name_of(hass, players)}
 
     screens = _layout_screens(hass)
     shown = shown_screen(hass, device_id)
@@ -1581,7 +1602,7 @@ async def tv_control(hass: HomeAssistant, device_id: str | None, action: str, tv
     if action == "show_remote":
         return await _show_remote(hass, device_id, chosen)
     try:
-        said = await tv_do(hass, chosen, action, seconds)
+        said = await tv_do(hass, chosen, action, seconds, level)
     except ValueError as err:
         return {"error": str(err), "tv": chosen["name"]}
     except HomeAssistantError as err:
@@ -1629,9 +1650,10 @@ class TvControlTool(llm.Tool):
     name = "tv_control"
     description = (
         "Work a TV and whatever app plays on it (Netflix, YouTube, Apple TV, Prime Video...). action: pause, resume, "
-        "skip (seconds: forward, or negative to go back; 30 when left out), louder, quieter, mute, unmute, "
-        "turn_on, turn_off, home (the TV's home screen), back, show_remote (opens the TV's touch pad remote on the "
-        "screen the person talks to). tv (optional): the TV's name when the person names one."
+        "skip (seconds: forward, or negative to go back; 30 when left out), louder, quieter, volume (level: 0 to "
+        "100), mute, unmute, turn_on, turn_off, home (the TV's home screen), back, show_remote (opens the TV's touch "
+        "pad remote on the screen the person talks to). tv (optional): the TV's name when the person names one. "
+        "Without tv, the volume actions change what plays in the person's room (music on a speaker), else the TV."
     )
     integration = DOMAIN
     parameters = vol.Schema(
@@ -1639,6 +1661,7 @@ class TvControlTool(llm.Tool):
             vol.Required("action"): vol.In(TV_ACTIONS),
             vol.Optional("tv"): str,
             vol.Optional("seconds"): vol.All(vol.Coerce(int), vol.Range(min=-10800, max=10800)),
+            vol.Optional("level"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
         }
     )
 
@@ -1648,7 +1671,9 @@ class TvControlTool(llm.Tool):
 
     async def async_call(self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext) -> Any:
         args = tool_input.tool_args
-        data = await tv_control(hass, getattr(llm_context, "device_id", None), args["action"], args.get("tv"), args.get("seconds"))
+        data = await tv_control(
+            hass, getattr(llm_context, "device_id", None), args["action"], args.get("tv"), args.get("seconds"), args.get("level")
+        )
         return _Tool._result(data, "error" in data)
 
 

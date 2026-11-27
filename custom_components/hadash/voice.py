@@ -184,10 +184,33 @@ def async_register(hass: HomeAssistant) -> None:
     async def off(user_input: Any, result: Any) -> str | None:
         return await voice.ask({"action": "off"}, slot(result, "where"), user_input.language)
 
+    def volume(kind: str) -> Any:
+        async def run(user_input: Any, result: Any) -> str | None:
+            """ "louder", "quieter", "volume 30": what plays in the room of the device the person talks to, else
+            the TV (as tv_control does for the AI agent)."""
+            from .assistant import tv_control
+            from .room_sound import level_of, text
+
+            level = None
+            if kind == "volume":
+                level = level_of(slot(result, "level"))
+                if level is None:
+                    return text("level", user_input.language)
+            data = await tv_control(hass, getattr(user_input, "device_id", None), kind, None, None, level)
+            if "error" not in data:
+                return data.get("result") or "Done."
+            return text("nothing", user_input.language) if "tvs" in data or "There is no TV" in data["error"] else data["error"]
+
+        return run
+
+    from .room_sound import SENTENCES as VOLUME_SENTENCES
+
     # A change in Home Assistant's Assist must never stop the dashboards from loading: only the sentences go.
     try:
         manager = get_agent_manager(hass)
-        for sentences, call in ((SENTENCES["show"], show), (SENTENCES["off"], off)):
+        pairs = [(SENTENCES["show"], show), (SENTENCES["off"], off)]
+        pairs += [(VOLUME_SENTENCES[kind], volume(kind)) for kind in ("louder", "quieter", "volume")]
+        for sentences, call in pairs:
             if TriggerDetails is not None:
                 manager.register_trigger(TriggerDetails(sentences, call))
             else:

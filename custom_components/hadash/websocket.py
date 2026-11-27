@@ -3,7 +3,10 @@ only an admin can publish."""
 
 from __future__ import annotations
 
+import copy
+import re
 from typing import Any
+import unicodedata
 
 import voluptuous as vol
 
@@ -39,6 +42,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get)
     websocket_api.async_register_command(hass, ws_publish)
     websocket_api.async_register_command(hass, ws_subscribe)
+    websocket_api.async_register_command(hass, ws_magic_add_screen)
     websocket_api.async_register_command(hass, ws_history)
     websocket_api.async_register_command(hass, ws_version)
     websocket_api.async_register_command(hass, ws_pro)
@@ -98,6 +102,60 @@ async def ws_publish(hass: HomeAssistant, connection: websocket_api.ActiveConnec
     drafts: DraftStore = hass.data[DRAFT]
     drafts.clear()
     connection.send_result(msg["id"], {"revision": data["revision"], "published_at": data["published_at"]})
+
+
+def screen_id(name: str, taken: list[str]) -> str:
+    """A short id for the address, made from the name, as the studio makes it: "Living room" becomes "living-room"."""
+    base = re.sub(r"[^a-z0-9]+", "-", unicodedata.normalize("NFD", name.lower()).encode("ascii", "ignore").decode()).strip("-") or "screen"
+    found, n = base, 2
+    while found in taken:
+        found, n = f"{base}-{n}", n + 1
+    return found
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "hadash/magic/add_screen",
+        vol.Required("name"): vol.All(str, vol.Length(min=1, max=60)),
+        vol.Required("layout"): dict,
+        vol.Optional("device"): dict,
+        vol.Optional("main"): dict,
+    }
+)
+@websocket_api.async_response
+async def ws_magic_add_screen(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Magic setup: a wall tablet says which room it hangs in and adds that room's screen.
+
+    Any signed-in user may do this, since a wall tablet often uses a login that is not an admin. It can only add a
+    new screen: the main layout and every other screen stay exactly as they are. When nothing was published yet,
+    the tablet also sends the main layout it shows (the first screen made from the home), so it is kept too.
+    """
+    if connection.user is None:
+        connection.send_error(msg["id"], "unauthorized", "Sign in first.")
+        return
+    layout, main = msg["layout"], msg.get("main")
+    if len(str(layout)) + len(str(main or "")) > MAX_LAYOUT:
+        connection.send_error(msg["id"], "too_large", "The layout is too large to save.")
+        return
+    layout.pop("screens", None)
+    store: LayoutStore = hass.data[DOMAIN]
+    before = store.data.get("revision", 0)
+    project = copy.deepcopy(store.layout) if store.layout else None
+    if project is None:
+        if not main:
+            connection.send_error(msg["id"], "no_layout", "Nothing was published yet.")
+            return
+        project = {**main, "screens": []}
+    screens = project.setdefault("screens", [])
+    screen: dict[str, Any] = {"id": screen_id(msg["name"], [s.get("id", "") for s in screens] + ["main"]), "name": msg["name"], "layout": layout}
+    if msg.get("device"):
+        screen["device"] = msg["device"]
+    screens.append(screen)
+    data = await store.async_publish(project, connection.user.name)
+    # A draft open in the studio gets the new screen too, so publishing the draft later does not remove it.
+    drafts: DraftStore = hass.data[DRAFT]
+    drafts.add_screen(screen, before)
+    connection.send_result(msg["id"], {"id": screen["id"], "revision": data["revision"]})
 
 
 @websocket_api.websocket_command({vol.Required("type"): "hadash/layout/subscribe"})

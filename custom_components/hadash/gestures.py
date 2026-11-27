@@ -149,6 +149,16 @@ async def async_setup(hass: HomeAssistant) -> None:
                 message["seconds"] = 5.0
             if event.data.get("style") in ("steps", "glow", "pointer"):
                 message["style"] = event.data["style"]
+        if gesture in VOLUME and not event.data.get("entity"):
+            # Music that plays in this room (the kitchen Bose) takes the thumb first, as "louder" does by voice.
+            from .room_sound import change, playing_here
+
+            area = next((a.id for a in ar.async_get(hass).async_list_areas() if _same(a.name, where)), None) if where else None
+            players = playing_here(hass, area)
+            if players:
+                gestures.send(where, message)
+                hass.async_create_task(change(hass, players, "louder" if gesture == "volume_up" else "quieter"))
+                return
         host = event.data.get("firetv")
         host = host if isinstance(host, str) and host else None
         if host:

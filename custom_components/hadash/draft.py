@@ -48,6 +48,21 @@ class DraftStore:
     def public(self) -> dict[str, Any]:
         return {k: self.data.get(k) for k in ("project", "base", "change", "by", "note", "spot", "updated")}
 
+    def add_screen(self, screen: dict[str, Any], before: int) -> None:
+        """A screen added from a tablet (Magic setup) also goes into a draft made on the version before it.
+
+        The draft keeps its base, so an open studio takes the change like an assistant's (one undo step), and
+        publishing that draft later keeps the new screen.
+        """
+        project = self.data.get("project")
+        if not project or self.data.get("base") != before:
+            return
+        project.setdefault("screens", []).append(copy.deepcopy(screen))
+        self.data = {**self.data, "change": self.change + 1, "by": BY_ASSISTANT, "note": f"Added the screen {screen.get('name')} from its tablet."}
+        self._store.async_delay_save(lambda: self.data, 1)
+        for listener in list(self._listeners):
+            listener(self.public())
+
     def save_from_studio(self, project: dict[str, Any], base: int, seen: int) -> bool:
         """The studio's own change. Refused when the assistant changed the draft after the studio last looked."""
         if self.data.get("by") == BY_ASSISTANT and seen < self.change and self.data.get("base") == base:

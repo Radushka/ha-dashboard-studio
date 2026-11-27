@@ -21,7 +21,9 @@ from .alarms import async_setup as async_setup_alarms
 from .intercom import async_setup as async_setup_intercom
 from .gestures import async_setup as async_setup_gestures
 from .eufy_live import async_setup as async_setup_eufy_live
+from .notices import async_setup as async_setup_notices
 from .nudges import async_setup as async_setup_nudges
+from .replay import async_setup as async_setup_replay
 from .safety import async_setup as async_setup_safety
 from .phones import async_setup as async_setup_phones
 from .reminders import async_setup as async_setup_reminders
@@ -43,6 +45,7 @@ from .satellite import async_register as async_register_satellites
 from .send import async_setup as async_setup_send
 from .hello import async_register as async_register_hello
 from .throw import async_register as async_register_throw
+from .follow import async_setup as async_setup_follow
 from .spots import SpotStore
 from .voice import async_register as async_register_voice
 from .stopping import async_register_stopping
@@ -104,8 +107,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     await async_setup_gestures(hass)
     await async_setup_nudges(hass)
     await async_setup_safety(hass)
+    # Notices (Pro): the home talks first, one calm line on the screen nearest the person.
+    await async_setup_notices(hass)
     # Eufy live: one owner for each Eufy camera's video, shared by every screen, and an early wake on a ring.
     await async_setup_eufy_live(hass)
+    # Home replay (Pro): a picture of each ring and parcel of the day, for the wall's short film of the day.
+    await async_setup_replay(hass)
     # Doorstep watch: our own package monitor, for cameras with an area marked in the studio. It starts once the
     # cameras are up, and looks only after a person leaves.
     hass.data[DOORSTEP] = DoorstepWatch(hass)
@@ -117,6 +124,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async_at_started(hass, start_doorstep)
     # Throw it to the TV (Pro): a card flicked up on a tablet opens on a TV.
     async_register_throw(hass)
+    # Room to room (Pro): what you watch or hear comes with you to the next room.
+    async_setup_follow(hass)
     # A tablet as a TV's ears (Pro): the tablet next to the TV hears, the TV listens, shows and answers.
     async_register_ears(hass)
     # The pages first, with "no-cache", so a browser never keeps an old studio.html after an update.

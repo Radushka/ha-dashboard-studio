@@ -294,7 +294,7 @@ async def fire_tv_now(hass: HomeAssistant, host: str) -> dict[str, Any]:
 
 # Integrations whose players are TVs or TV boxes (as the tile's list).
 TV_PLATFORMS = {"apple_tv", "androidtv", "androidtv_remote", "braviatv", "samsungtv", "roku", "webostv", "philips_js", "vizio", "panasonic_viera", "kodi"}
-VOICE_ACTIONS = ["pause", "resume", "skip", "louder", "quieter", "mute", "unmute", "turn_on", "turn_off", "home", "back", "show_remote"]
+VOICE_ACTIONS = ["pause", "resume", "skip", "louder", "quieter", "volume", "mute", "unmute", "turn_on", "turn_off", "home", "back", "show_remote"]
 # The remote's own skip keys, for apps that do not take an exact place.
 _SKIP_KEYS = {
     "apple_tv": ("skip_forward", "skip_backward"),
@@ -416,15 +416,17 @@ def _sound_of(hass: HomeAssistant, tv: dict[str, Any]) -> str | None:
     return tv["id"]
 
 
-async def tv_do(hass: HomeAssistant, tv: dict[str, Any], action: str, seconds: int | None = None) -> str:
+async def tv_do(hass: HomeAssistant, tv: dict[str, Any], action: str, seconds: int | None = None, level: int | None = None) -> str:
     """Does one thing on the TV. Returns a short word for the answer; raises ValueError when it cannot."""
     tid: str = tv["id"]
     call = hass.services.async_call
     if tid.startswith("firetv:"):
         host = tid[len("firetv:"):]
         sound = _sound_of(hass, tv)
-        if action in ("louder", "quieter", "mute", "unmute") and sound:
-            return await _volume(hass, sound, action)
+        if action in ("louder", "quieter", "volume", "mute", "unmute") and sound:
+            return await _volume(hass, sound, action, level)
+        if action == "volume":
+            raise ValueError("That TV takes only louder and quieter.")
         key = {
             "pause": "pause", "resume": "play", "louder": "volume_up", "quieter": "volume_down", "mute": "mute",
             "unmute": "mute", "turn_on": "wake", "turn_off": "sleep", "home": "home", "back": "back",
@@ -455,8 +457,8 @@ async def tv_do(hass: HomeAssistant, tv: dict[str, Any], action: str, seconds: i
         await call("media_player", "media_play", data, blocking=True)
     elif action in ("turn_on", "turn_off"):
         await call("media_player", action, data, blocking=True)
-    elif action in ("louder", "quieter", "mute", "unmute"):
-        return await _volume(hass, _sound_of(hass, tv) or tid, action)
+    elif action in ("louder", "quieter", "volume", "mute", "unmute"):
+        return await _volume(hass, _sound_of(hass, tv) or tid, action, level)
     elif action == "skip":
         step = seconds or 30
         position = state.attributes.get("media_position")
@@ -483,17 +485,10 @@ async def tv_do(hass: HomeAssistant, tv: dict[str, Any], action: str, seconds: i
     return "Done."
 
 
-async def _volume(hass: HomeAssistant, player: str, action: str) -> str:
-    state = hass.states.get(player)
-    data = {"entity_id": player}
-    if action in ("mute", "unmute"):
-        await hass.services.async_call("media_player", "volume_mute", {**data, "is_volume_muted": action == "mute"}, blocking=True)
-        return "Done."
-    level = state.attributes.get("volume_level") if state else None
-    if isinstance(level, (int, float)) and state is not None and state.attributes.get("supported_features", 0) & 4:
-        step = 0.06 if action == "louder" else -0.06
-        await hass.services.async_call("media_player", "volume_set", {**data, "volume_level": round(max(0.0, min(1.0, level + step)), 2)}, blocking=True)
-    else:
-        for _ in range(3):
-            await hass.services.async_call("media_player", "volume_up" if action == "louder" else "volume_down", data, blocking=True)
+async def _volume(hass: HomeAssistant, player: str, action: str, level: int | None = None) -> str:
+    from .room_sound import change
+
+    if action == "volume" and level is None:
+        raise ValueError("Say a volume from 0 to 100.")
+    await change(hass, [player], action, level)
     return "Done."
