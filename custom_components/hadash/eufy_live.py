@@ -68,7 +68,8 @@ EARLY_S = 25.0
 # An early wake happens at most once in this time for each camera.
 EARLY_GAP_S = 60.0
 # Sensors of the camera's own device that start an early wake.
-EARLY_WORDS = ("ring", "person", "doorbell", "motion_human")
+# Only a ring or a person: a doorbell also has motion, sound, pet and package sensors, which must not wake it.
+EARLY_WORDS = ("_ringing", "person_detected", "motion_human")
 # The sweeper: how often it looks, how long a video may stream unwatched, and the least time between two stops.
 SWEEP_S = 30.0
 UNWATCHED_S = 60.0
@@ -76,6 +77,8 @@ SWEEP_GAP_S = 120.0
 # How long the HomeBase of each camera is remembered before it is asked again.
 LINKS_S = 6 * 3600.0
 GO2RTC = "http://localhost:1984/"
+# The source the eufy_security integration gives each go2rtc stream between videos.
+PLACEHOLDER = "tcp://127.0.0.1:65535"
 
 
 def _device(hass: HomeAssistant, entity_id: str) -> dr.DeviceEntry | None:
@@ -316,6 +319,11 @@ class Live:
             await asyncio.sleep(0.5)
         if self.wanted() or not self.streaming():
             return
+        # Home Assistant may still say "streaming" after Eufy ended the video (the integration misses that news).
+        # The bytes in go2rtc tell the truth: no video arriving means there is nothing to stop.
+        if way == "p2p" and await self.owner.video_flows(self.entity_id) is False:
+            _LOGGER.debug("%s: the video had already ended, so no stop is sent", self.entity_id)
+            return
         try:
             await self._call(f"stop_{way}_livestream")
         except Exception as err:  # noqa: BLE001
@@ -433,8 +441,8 @@ class Lives:
                 return e.entity_id
         return None
 
-    async def _watched_in_go2rtc(self) -> dict[str, int] | None:
-        """Viewers of each go2rtc stream, or None when go2rtc cannot be asked (then nothing is swept)."""
+    async def _go2rtc_streams(self) -> dict[str, Any] | None:
+        """go2rtc's streams, or None when go2rtc cannot be asked."""
         url = GO2RTC
         for entry in self.hass.config_entries.async_entries("webrtc"):
             url = entry.data.get("url") or url
@@ -443,7 +451,28 @@ class Lives:
                 streams = await res.json(content_type=None)
         except Exception:  # noqa: BLE001
             return None
-        return {name: len((s or {}).get("consumers") or []) for name, s in (streams or {}).items()}
+        return streams if isinstance(streams, dict) else None
+
+    async def _watched_in_go2rtc(self) -> dict[str, int] | None:
+        """Viewers of each go2rtc stream, or None when go2rtc cannot be asked (then nothing is swept)."""
+        streams = await self._go2rtc_streams()
+        if streams is None:
+            return None
+        return {name: len((s or {}).get("consumers") or []) for name, s in streams.items()}
+
+    async def video_flows(self, entity_id: str) -> bool | None:
+        """True while the camera's video arrives in go2rtc, False when it does not, None when go2rtc cannot tell.
+        Between videos the stream keeps only the integration's placeholder source (tcp://127.0.0.1:65535)."""
+        serial = serial_of(self.hass, entity_id)
+        streams = await self._go2rtc_streams()
+        if streams is None or not serial:
+            return None
+        if serial not in streams:
+            return None
+        for producer in (streams[serial] or {}).get("producers") or []:
+            if not str(producer.get("url", "")).startswith(PLACEHOLDER):
+                return True
+        return False
 
     async def sweep(self) -> None:
         """Stop leftover videos: a Eufy camera that streams for a minute with nobody watching it anywhere.

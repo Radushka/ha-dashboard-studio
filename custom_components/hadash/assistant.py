@@ -1555,6 +1555,57 @@ class VideoControlTool(llm.Tool):
         return _Tool._result(data, "error" in data)
 
 
+# ---------- Open what the screen shows: a card, a side menu button, a page; or close the page that is open
+
+OPEN_PROMPT = (
+    "To open something the person can see on their screen (a card, a side menu button such as Media, Family, "
+    "Cameras or TV remote, a room, the weather, the calendar), or to close the page that is open (close, go back), "
+    "call open_on_screen with the name as the screen shows it, in the screen's language. It does what a tap does. "
+    "Never say you cannot open something before you tried it. Answer with a word or two."
+)
+
+
+async def open_on_screen(hass: HomeAssistant, device_id: str | None, what: str | None, close: bool) -> dict[str, Any]:
+    """Opens a thing on the screen the person looks at, by the name it shows, as a tap would (the page finds it)."""
+    from .send import SEND
+    from .voice import VOICE
+
+    shown = shown_screen(hass, device_id)
+    voice = hass.data.get(VOICE)
+    sender = hass.data.get(SEND)
+    walls = [w for w in voice.walls.values() if shown and w.connection == shown[1]] if voice else []
+    if not walls or sender is None:
+        return {"error": "This device shows no Dashboard Studio screen."}
+    if not close and not (what or "").strip():
+        return {"error": "Say what to open."}
+    command: dict[str, Any] = {"action": "close"} if close else {"action": "open", "what": str(what).strip()[:80]}
+    said = await sender._deliver_command(voice, walls, command)  # noqa: SLF001
+    return {"result": said or "The screen did not answer."}
+
+
+class OpenOnScreenTool(llm.Tool):
+    """For words the wall does not know itself ("bring up my tunes"), and for every language."""
+
+    name = "open_on_screen"
+    description = (
+        "Open a card, a side menu button or a page on the screen the person looks at, by the name it shows "
+        "(what: Media, Family, Cameras, TV remote, Kitchen, Weather...). close: true closes the page that is open "
+        "(close, go back). If the name is not found, the answer lists what the screen has: pick the one they mean "
+        "and call again."
+    )
+    integration = DOMAIN
+    parameters = vol.Schema({vol.Optional("what"): str, vol.Optional("close", default=False): bool})
+
+    def __init__(self) -> None:
+        if hasattr(llm, "ToolAnnotations"):
+            self.annotations = llm.ToolAnnotations(read_only=False, destructive=False, idempotent=True, open_world=False)
+
+    async def async_call(self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext) -> Any:
+        args = tool_input.tool_args
+        data = await open_on_screen(hass, getattr(llm_context, "device_id", None), args.get("what"), bool(args.get("close")))
+        return _Tool._result(data, "error" in data)
+
+
 TV_PROMPT = (
     "The TV itself and its apps (Netflix, YouTube, Apple TV, Prime Video...) are worked with tv_control: pause, "
     "resume, skip (seconds, negative to go back), louder, quieter, volume (level 0 to 100), mute, unmute, turn_on, "
@@ -1758,8 +1809,8 @@ class DashboardStudioAPI(llm.API):
 
     async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
         tools: list[llm.Tool] = [NewsTool(), WeatherTool(), ReadingsTool(), HistoryTool(), BriefingTool(),
-                                 VideosTool(), PlayVideoTool(), VideoControlTool(), TvControlTool()]
-        prompt = f"{NEWS_PROMPT}\n\n{WEATHER_PROMPT}\n\n{HISTORY_PROMPT}\n\n{BRIEFING_PROMPT}\n\n{VIDEO_PROMPT}\n\n{TV_PROMPT}"
+                                 VideosTool(), PlayVideoTool(), VideoControlTool(), TvControlTool(), OpenOnScreenTool()]
+        prompt = f"{NEWS_PROMPT}\n\n{WEATHER_PROMPT}\n\n{HISTORY_PROMPT}\n\n{BRIEFING_PROMPT}\n\n{VIDEO_PROMPT}\n\n{TV_PROMPT}\n\n{OPEN_PROMPT}"
         # Who is talking to a wall tablet: the person in front of it, or the only person at home.
         if where := _tablet_prompt(self.hass, llm_context):
             prompt = f"{prompt}\n\n{where}"
