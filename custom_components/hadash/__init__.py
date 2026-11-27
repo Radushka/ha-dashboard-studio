@@ -20,6 +20,7 @@ from homeassistant.helpers.start import async_at_started
 from .alarms import async_setup as async_setup_alarms
 from .intercom import async_setup as async_setup_intercom
 from .gestures import async_setup as async_setup_gestures
+from .eufy_live import async_setup as async_setup_eufy_live
 from .nudges import async_setup as async_setup_nudges
 from .safety import async_setup as async_setup_safety
 from .phones import async_setup as async_setup_phones
@@ -103,6 +104,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     await async_setup_gestures(hass)
     await async_setup_nudges(hass)
     await async_setup_safety(hass)
+    # Eufy live: one owner for each Eufy camera's video, shared by every screen, and an early wake on a ring.
+    await async_setup_eufy_live(hass)
     # Doorstep watch: our own package monitor, for cameras with an area marked in the studio. It starts once the
     # cameras are up, and looks only after a person leaves.
     hass.data[DOORSTEP] = DoorstepWatch(hass)

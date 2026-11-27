@@ -15,6 +15,7 @@ from .assistant import conversation_agents
 from .const import DOMAIN, DRAFT, PRO
 from .draft import DraftStore
 from .eufy import ws_eufy_sleep
+from .eufy_live import ws_eufy_live
 from .firetv import ws_tv_find, ws_tv_forget, ws_tv_setup, ws_tv_update_app
 from .tvremote import ws_tv_key, ws_tv_remotes, ws_tv_watch
 from .layout import LayoutStore
@@ -51,6 +52,8 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_auto)
     websocket_api.async_register_command(hass, ws_saver_show)
     websocket_api.async_register_command(hass, ws_saver_subscribe)
+    websocket_api.async_register_command(hass, ws_moment_play)
+    websocket_api.async_register_command(hass, ws_moment_subscribe)
     websocket_api.async_register_command(hass, ws_draft_get)
     websocket_api.async_register_command(hass, ws_draft_save)
     websocket_api.async_register_command(hass, ws_draft_subscribe)
@@ -67,6 +70,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_voice_check_undo)
     websocket_api.async_register_command(hass, ws_secure_url)
     websocket_api.async_register_command(hass, ws_eufy_sleep)
+    websocket_api.async_register_command(hass, ws_eufy_live)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "hadash/layout"})
@@ -201,6 +205,54 @@ def ws_saver_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConn
         connection.send_message(websocket_api.event_message(msg["id"], {"screen": event.data.get("screen", "")}))
 
     connection.subscriptions[msg["id"]] = hass.bus.async_listen(SAVER_EVENT, forward)
+    connection.send_result(msg["id"])
+
+
+# "Play on the tablets" in the studio: one moment (rain on the glass, the doorbell, welcome home...) plays on the
+# real tablets of one screen for a short while, so it can be seen or filmed on the wall. Nothing in the home changes.
+MOMENT_EVENT = "hadash_moment"
+MOMENT_TABLETS = "hadash_moment_tablets"
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "hadash/moment/play",
+        vol.Optional("screen", default=""): str,
+        vol.Required("moment"): vol.Match(r"^[a-z][a-z-]{0,39}$"),
+        vol.Optional("seconds", default=20): vol.All(int, vol.Range(min=3, max=60)),
+    }
+)
+@websocket_api.require_admin
+@callback
+def ws_moment_play(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Asks the tablets of a screen ("" is the main layout) to play one moment now. Answers how many listen."""
+    tablets: dict[int, str] = hass.data.setdefault(MOMENT_TABLETS, {})
+    count = sum(1 for screen in tablets.values() if screen == msg["screen"])
+    hass.bus.async_fire(MOMENT_EVENT, {"screen": msg["screen"], "moment": msg["moment"], "seconds": msg["seconds"]})
+    connection.send_result(msg["id"], {"tablets": count})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "hadash/moment/subscribe", vol.Optional("screen", default=""): str})
+@callback
+def ws_moment_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """A tablet waits for "Play on the tablets". Like the layout, this works for non-admin logins too."""
+    tablets: dict[int, str] = hass.data.setdefault(MOMENT_TABLETS, {})
+    key = id(connection) * 1000 + msg["id"]
+    tablets[key] = msg["screen"]
+
+    @callback
+    def forward(event: Any) -> None:
+        if event.data.get("screen", "") == msg["screen"]:
+            connection.send_message(websocket_api.event_message(msg["id"], {"moment": event.data.get("moment"), "seconds": event.data.get("seconds", 20)}))
+
+    stop = hass.bus.async_listen(MOMENT_EVENT, forward)
+
+    @callback
+    def gone() -> None:
+        tablets.pop(key, None)
+        stop()
+
+    connection.subscriptions[msg["id"]] = gone
     connection.send_result(msg["id"])
 
 
