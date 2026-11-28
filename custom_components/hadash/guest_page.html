@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#101218">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>House</title>
+<style>
+  :root {
+    --bg: #0e1016; --card: rgba(255,255,255,.065); --card-edge: rgba(255,255,255,.09); --text: #f4f5f8; --dim: rgba(244,245,248,.58);
+    --accent: #ffb547; --on: #ffd27a; --on-text: #1b1406; --field: rgba(255,255,255,.08); --danger: #ff6b5e;
+    --r: 22px; --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px);
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f3f1ec; --card: #fff; --card-edge: rgba(0,0,0,.06); --text: #17181c; --dim: rgba(23,24,28,.55); --field: rgba(0,0,0,.05); --on: #ffcf6b; color-scheme: light; }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body { font: 17px/1.35 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, system-ui, sans-serif; min-height: 100vh;
+    padding: calc(var(--safe-top) + 22px) 16px calc(var(--safe-bottom) + 34px); -webkit-font-smoothing: antialiased; }
+  main { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; touch-action: manipulation; }
+  header { display: flex; flex-direction: column; gap: 6px; padding: 4px 4px 2px; }
+  .kicker { font-size: 13px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); display: flex; align-items: center; gap: 8px; }
+  .kicker i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); animation: breathe 2.8s ease-in-out infinite; }
+  h1 { margin: 0; font-size: 34px; line-height: 1.05; letter-spacing: -.025em; font-weight: 650; text-wrap: balance; }
+  .ends { font-size: 14px; color: var(--dim); }
+  @keyframes breathe { 50% { opacity: .45; } }
+
+  .calls { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .call { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: 18px; background: var(--card); box-shadow: inset 0 0 0 1px var(--card-edge); text-decoration: none; color: inherit; min-height: 62px; }
+  .call svg { flex: none; width: 34px; height: 34px; padding: 8px; border-radius: 50%; background: #34c759; fill: #fff; }
+  .call b { display: block; font-weight: 650; }
+  .call span { font-size: 13px; color: var(--dim); }
+
+  .room { border-radius: var(--r); background: var(--card); box-shadow: inset 0 0 0 1px var(--card-edge); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .room-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .room h2 { margin: 0; font-size: 21px; font-weight: 650; letter-spacing: -.01em; }
+  .alloff { font-size: 14px; font-weight: 600; color: var(--dim); padding: 6px 2px; }
+  .scenes { display: flex; flex-wrap: wrap; gap: 8px; }
+  .scene { padding: 9px 15px; border-radius: 999px; background: var(--field); font-size: 15px; font-weight: 600; min-height: 40px; }
+  .scene.done { background: var(--accent); color: var(--on-text); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .tile { position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; gap: 14px; min-height: 92px; padding: 13px 14px;
+    border-radius: 18px; background: var(--field); text-align: left; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+  .tile .fill { position: absolute; inset: 0; transform-origin: left; background: var(--on); transform: scaleX(var(--lvl, 0)); transition: transform .25s; }
+  .tile.drag .fill { transition: none; }
+  .tile.on { color: var(--on-text); }
+  .tile.on .fill { --lvl: 1; }
+  .tile > * { position: relative; }
+  .tile .ic { width: 26px; height: 26px; }
+  .tile .ic path, .tile .ic circle { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .tile .nm { font-size: 15px; font-weight: 600; line-height: 1.2; }
+  .tile .st { font-size: 13px; opacity: .65; }
+  .tile.off { color: var(--text); }
+  .wide { grid-column: 1 / -1; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 18px; background: var(--field); min-height: 60px; }
+  .row .nm { flex: 1; min-width: 0; font-weight: 600; font-size: 15px; }
+  .row .sub { display: block; font-size: 13px; font-weight: 400; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .round { flex: none; width: 46px; height: 46px; border-radius: 50%; background: var(--field); display: grid; place-items: center; font-size: 22px; font-weight: 600; }
+  .round svg { width: 22px; height: 22px; fill: currentColor; }
+  .round.big { background: var(--text); color: var(--bg); }
+  .temp { min-width: 74px; text-align: center; font-size: 26px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .temp small { display: block; font-size: 12px; font-weight: 500; color: var(--dim); letter-spacing: 0; }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 34px; background: none; margin: 0; }
+  input[type=range]::-webkit-slider-runnable-track { height: 8px; border-radius: 4px; background: var(--field); }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 26px; height: 26px; margin-top: -9px; border-radius: 50%; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.35); }
+  input[type=range]::-moz-range-track { height: 8px; border-radius: 4px; background: var(--field); }
+  input[type=range]::-moz-range-thumb { width: 26px; height: 26px; border: 0; border-radius: 50%; background: #fff; }
+  .music { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 18px; background: var(--field); }
+  .music .top { display: flex; align-items: center; gap: 10px; }
+
+  .notes { border-radius: var(--r); background: var(--card); box-shadow: inset 0 0 0 1px var(--card-edge); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .notes h2 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+  .notes p { margin: 0; }
+  .li { position: relative; padding-left: 1.1em; }
+  .li::before { content: ""; position: absolute; left: .2em; top: .6em; width: .36em; height: .36em; border-radius: 50%; background: var(--accent); }
+  .wifi { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 14px; align-items: center; padding: 12px 14px; border-radius: 16px; background: var(--field); }
+  .wifi dt { font-size: 13px; color: var(--dim); }
+  .wifi dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+  .wifi .pw { font-family: ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .04em; }
+  .copy { font-size: 14px; font-weight: 600; color: var(--accent); padding: 6px; }
+
+  .quiet { margin-top: 18vh; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .quiet .ring { width: 64px; height: 64px; border-radius: 50%; border: 3px solid var(--field); border-top-color: var(--accent); animation: spin 1.6s linear infinite; }
+  .quiet .ring.still { animation: none; border-top-color: var(--field); }
+  .quiet h1 { font-size: 28px; }
+  .quiet p { margin: 0; color: var(--dim); max-width: 320px; text-wrap: balance; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .toast { position: fixed; left: 50%; bottom: calc(var(--safe-bottom) + 18px); transform: translateX(-50%); padding: 10px 18px; border-radius: 999px;
+    background: rgba(20,22,30,.92); color: #fff; font-size: 14px; font-weight: 600; opacity: 0; transition: opacity .3s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  .foot { text-align: center; font-size: 13px; color: var(--dim); padding-top: 4px; }
+</style>
+</head>
+<body>
+<main id="app" aria-live="polite"></main>
+<div class="toast" id="toast" role="status"></div>
+<script>
+"use strict";
+(() => {
+  // The key comes after the "#", so it never travels in the address to a server. It goes in a header instead.
+  const key = decodeURIComponent(location.hash.slice(1));
+  const base = location.pathname.replace(/\/$/, "");
+  const app = document.getElementById("app");
+  const toastEl = document.getElementById("toast");
+
+  // The guest's own phone language, not the house's: the guest is the one reading.
+  const WORDS = {
+    fr: { "Guest": "Invité", "Welcome to {home}": "Bienvenue à {home}", "Welcome": "Bienvenue", "Works until {time}": "Fonctionne jusqu'à {time}",
+      "Call {name}": "Appeler {name}", "All off": "Tout éteindre", "Open": "Ouvrir", "Stop": "Arrêter", "Close": "Fermer",
+      "On": "Allumé", "Off": "Éteint", "Playing": "En lecture", "Paused": "En pause", "Now {now}": "Actuellement {now}",
+      "House notes": "Notes de la maison", "Wi-Fi": "Wi-Fi", "Password": "Mot de passe", "Copy": "Copier", "Copied": "Copié",
+      "Waiting for guest mode": "En attente du mode invité", "This page opens by itself when guest mode starts at the house.": "Cette page s'ouvre toute seule quand le mode invité commence à la maison.",
+      "This link has ended": "Ce lien a pris fin", "Ask the family for a new one.": "Demandez-en un nouveau à la famille.",
+      "Too many tries": "Trop d'essais", "Wait a few minutes, then open the link again.": "Attendez quelques minutes, puis rouvrez le lien.",
+      "Cannot reach the house": "La maison ne répond pas", "Trying again…": "Nouvel essai…", "That did not work": "Cela n'a pas marché",
+      "Nothing to control here yet.": "Rien à contrôler ici pour le moment.", "Next": "Suivant", "Volume": "Volume", "Warmer": "Plus chaud", "Cooler": "Plus frais" },
+    de: { "Guest": "Gast", "Welcome to {home}": "Willkommen in {home}", "Welcome": "Willkommen", "Works until {time}": "Gilt bis {time}",
+      "Call {name}": "{name} anrufen", "All off": "Alles aus", "Open": "Öffnen", "Stop": "Stopp", "Close": "Schließen",
+      "On": "An", "Off": "Aus", "Playing": "Läuft", "Paused": "Pausiert", "Now {now}": "Jetzt {now}",
+      "House notes": "Hinweise zum Haus", "Wi-Fi": "WLAN", "Password": "Passwort", "Copy": "Kopieren", "Copied": "Kopiert",
+      "Waiting for guest mode": "Warten auf den Gastmodus", "This page opens by itself when guest mode starts at the house.": "Diese Seite öffnet sich von selbst, wenn der Gastmodus im Haus beginnt.",
+      "This link has ended": "Dieser Link ist abgelaufen", "Ask the family for a new one.": "Bitte die Familie um einen neuen.",
+      "Too many tries": "Zu viele Versuche", "Wait a few minutes, then open the link again.": "Warte ein paar Minuten und öffne den Link dann erneut.",
+      "Cannot reach the house": "Das Haus antwortet nicht", "Trying again…": "Neuer Versuch…", "That did not work": "Das hat nicht geklappt",
+      "Nothing to control here yet.": "Hier gibt es noch nichts zu steuern.", "Next": "Weiter", "Volume": "Lautstärke", "Warmer": "Wärmer", "Cooler": "Kühler" },
+    es: { "Guest": "Invitado", "Welcome to {home}": "Bienvenido a {home}", "Welcome": "Bienvenido", "Works until {time}": "Funciona hasta las {time}",
+      "Call {name}": "Llamar a {name}", "All off": "Apagar todo", "Open": "Abrir", "Stop": "Parar", "Close": "Cerrar",
+      "On": "Encendido", "Off": "Apagado", "Playing": "Sonando", "Paused": "En pausa", "Now {now}": "Ahora {now}",
+      "House notes": "Notas de la casa", "Wi-Fi": "Wi-Fi", "Password": "Contraseña", "Copy": "Copiar", "Copied": "Copiado",
+      "Waiting for guest mode": "Esperando el modo invitado", "This page opens by itself when guest mode starts at the house.": "Esta página se abre sola cuando empieza el modo invitado en la casa.",
+      "This link has ended": "Este enlace ha terminado", "Ask the family for a new one.": "Pide uno nuevo a la familia.",
+      "Too many tries": "Demasiados intentos", "Wait a few minutes, then open the link again.": "Espera unos minutos y vuelve a abrir el enlace.",
+      "Cannot reach the house": "La casa no responde", "Trying again…": "Intentando de nuevo…", "That did not work": "No ha funcionado",
+      "Nothing to control here yet.": "Todavía no hay nada que controlar aquí.", "Next": "Siguiente", "Volume": "Volumen", "Warmer": "Más calor", "Cooler": "Más fresco" },
+  };
+  const lang = (navigator.language || "en").slice(0, 2).toLowerCase();
+  document.documentElement.lang = WORDS[lang] ? lang : "en";
+  const t = (s, v) => String((WORDS[lang] || {})[s] || s).replace(/\{(\w+)\}/g, (_, k) => (v && v[k] != null ? v[k] : ""));
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const bold = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+
+  let data = null;
+  let state = "loading";
+  let timer = 0;
+  let failures = 0;
+  const pending = new Map();
+
+  function toast(text) {
+    toastEl.textContent = text;
+    toastEl.classList.add("show");
+    clearTimeout(toast.t);
+    toast.t = setTimeout(() => toastEl.classList.remove("show"), 2200);
+  }
+
+  async function read() {
+    clearTimeout(timer);
+    if (!key) return show("ended");
+    try {
+      const r = await fetch(base + "/state", { headers: { "X-Hadash-Guest": key }, cache: "no-store", credentials: "omit" });
+      if (r.status === 401) return show("ended");
+      if (r.status === 429) { show("wait"); return (timer = setTimeout(read, 60000)); }
+      if (!r.ok) throw new Error(String(r.status));
+      data = await r.json();
+      failures = 0;
+      show(data.on ? "house" : "waiting");
+    } catch (e) {
+      failures++;
+      if (failures > 2) show("lost");
+    }
+    // Every few seconds while the page is in front; a phone in a pocket asks nothing.
+    if (!document.hidden) timer = setTimeout(read, state === "waiting" ? 15000 : failures ? 8000 : 4000);
+  }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && state !== "ended") read(); });
+
+  async function send(id, action, value) {
+    try {
+      const r = await fetch(base + "/do", { method: "POST", headers: { "X-Hadash-Guest": key, "Content-Type": "application/json" }, credentials: "omit",
+        body: JSON.stringify({ id, action, value }) });
+      if (r.status === 401) return show("ended");
+      if (!r.ok) toast(t("That did not work"));
+    } catch (e) {
+      toast(t("Cannot reach the house"));
+    }
+    clearTimeout(timer);
+    timer = setTimeout(read, 500);
+  }
+
+  const timeOf = (iso) => {
+    const d = new Date(iso);
+    const sameDay = d.toDateString() === new Date().toDateString();
+    return d.toLocaleString(undefined, sameDay ? { hour: "numeric", minute: "2-digit" } : { weekday: "short", hour: "numeric", minute: "2-digit" });
+  };
+
+  const ICON = {
+    light: '<path d="M9 18h6M10 21h4M12 3a6 6 0 00-3.6 10.8c.7.6 1.1 1.3 1.1 2.2h5c0-.9.4-1.6 1.1-2.2A6 6 0 0012 3z"/>',
+    fan: '<circle cx="12" cy="12" r="1.6"/><path d="M12 10.4c0-4 1-6.4 3.4-6.4 2 0 2.6 2.2 1 4-1.3 1.4-2.9 2-4.4 2.4M13.4 12.8c3.4 2 5 4 3.8 6-1 1.8-3.2 1.2-4-1-.6-1.8-.4-3.5 0-5M10.6 12.8c-3.4 2-6 2.2-7.2.2-1-1.8.6-3.4 3-3 1.8.4 3.2 1.4 4.2 2.8"/>',
+    cover: '<path d="M4 4h16M5 4v16M19 4v16M5 9h14M5 14h14"/>',
+  };
+  const svg = (k) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${ICON[k] || ICON.light}</svg>`;
+  const PLAY = '<svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>';
+  const PAUSE = '<svg viewBox="0 0 24 24"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>';
+  const NEXT = '<svg viewBox="0 0 24 24"><path d="M6 6l9 6-9 6zM16 6h2.4v12H16z"/></svg>';
+  const PHONE = '<svg viewBox="0 0 24 24"><path d="M6.6 10.8a15 15 0 006.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1A17 17 0 013 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1z"/></svg>';
+
+  function quiet(title, words, still) {
+    app.innerHTML = `<section class="quiet"><div class="ring${still ? " still" : ""}"></div><h1>${esc(title)}</h1><p>${esc(words)}</p></section>`;
+  }
+
+  function show(next) {
+    state = next;
+    if (next === "ended") { clearTimeout(timer); return quiet(t("This link has ended"), t("Ask the family for a new one."), true); }
+    if (next === "wait") return quiet(t("Too many tries"), t("Wait a few minutes, then open the link again."), true);
+    if (next === "lost" && !data) return quiet(t("Cannot reach the house"), t("Trying again…"));
+    if (next === "loading") return quiet("", "");
+    if (next === "waiting") {
+      document.title = data.home || "House";
+      return quiet(t("Waiting for guest mode"), t("This page opens by itself when guest mode starts at the house."));
+    }
+    // Do not redraw under a finger.
+    if (document.querySelector(".tile.drag") || document.activeElement?.type === "range") return;
+    draw();
+  }
+
+  function thing(x) {
+    const name = esc(x.name);
+    if (x.kind === "light" || x.kind === "fan") {
+      const on = x.state === "on";
+      const lvl = x.kind === "light" && on && x.level != null ? x.level / 100 : on ? 1 : 0;
+      const st = on ? (x.level != null ? x.level + "%" : t("On")) : t("Off");
+      return `<button class="tile ${on ? "on" : "off"}" data-id="${esc(x.id)}" data-kind="${x.kind}" style="--lvl:${lvl}" aria-pressed="${on}">
+        <span class="fill" style="transform:scaleX(${lvl})"></span>${svg(x.kind)}<span><span class="nm">${name}</span><br><span class="st">${esc(st)}</span></span></button>`;
+    }
+    if (x.kind === "cover") {
+      return `<div class="row wide"><span class="nm">${name}</span>
+        <button class="round" data-id="${esc(x.id)}" data-act="open" aria-label="${esc(t("Open"))}">↑</button>
+        <button class="round" data-id="${esc(x.id)}" data-act="stop" aria-label="${esc(t("Stop"))}">■</button>
+        <button class="round" data-id="${esc(x.id)}" data-act="close" aria-label="${esc(t("Close"))}">↓</button></div>`;
+    }
+    if (x.kind === "climate") {
+      if (typeof x.target !== "number") return "";
+      const unit = x.unit === "°F" ? "°" : "°";
+      const now = typeof x.now === "number" ? `<small>${esc(t("Now {now}", { now: Math.round(x.now) + unit }))}</small>` : "";
+      return `<div class="row wide"><span class="nm">${name}</span>
+        <button class="round" data-id="${esc(x.id)}" data-temp="-1" aria-label="${esc(t("Cooler"))}">−</button>
+        <span class="temp">${esc(String(x.target).replace(/\.0$/, ""))}${unit}${now}</span>
+        <button class="round" data-id="${esc(x.id)}" data-temp="1" aria-label="${esc(t("Warmer"))}">+</button></div>`;
+    }
+    if (x.kind === "media_player") {
+      const playing = x.state === "playing";
+      const sub = x.title ? esc(x.title + (x.artist ? " · " + x.artist : "")) : esc(playing ? t("Playing") : x.state === "paused" ? t("Paused") : t("Off"));
+      const vol = x.volume != null ? `<input type="range" min="0" max="100" value="${x.volume}" data-id="${esc(x.id)}" aria-label="${esc(t("Volume"))}">` : "";
+      return `<div class="music wide"><div class="top"><span class="nm" style="flex:1;min-width:0;font-weight:600;font-size:15px">${name}<span class="sub" style="display:block;font-size:13px;font-weight:400;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sub}</span></span>
+        <button class="round" data-id="${esc(x.id)}" data-act="next" aria-label="${esc(t("Next"))}">${NEXT}</button>
+        <button class="round big" data-id="${esc(x.id)}" data-act="play_pause" aria-label="${esc(playing ? t("Paused") : t("Playing"))}">${playing ? PAUSE : PLAY}</button></div>${vol}</div>`;
+    }
+    return "";
+  }
+
+  function draw() {
+    const d = data;
+    document.title = d.home || "House";
+    let html = `<header><span class="kicker"><i></i>${esc(t("Guest"))}</span><h1>${esc(d.home ? t("Welcome to {home}", { home: d.home }) : t("Welcome"))}</h1>
+      <span class="ends">${esc(t("Works until {time}", { time: timeOf(d.ends) }))}</span></header>`;
+    if (d.calls && d.calls.length) {
+      html += `<div class="calls">${d.calls.map((c) => `<a class="call" href="tel:${esc(c.phone.replace(/[^\d+*#]/g, ""))}" aria-label="${esc(t("Call {name}", { name: c.name || c.phone }))}">${PHONE}<span><b>${esc(c.name || c.phone)}</b><span>${esc(c.phone)}</span></span></a>`).join("")}</div>`;
+    }
+    const rooms = d.rooms || [];
+    for (const room of rooms) {
+      const scenes = room.things.filter((x) => x.kind === "scene");
+      const rest = room.things.filter((x) => x.kind !== "scene");
+      const anyOn = rest.some((x) => x.kind === "light" && x.state === "on");
+      html += `<section class="room"><div class="room-head"><h2>${esc(room.room)}</h2>${anyOn ? `<button class="alloff" data-alloff="${esc(room.room)}">${esc(t("All off"))}</button>` : ""}</div>`;
+      if (scenes.length) html += `<div class="scenes">${scenes.map((s) => `<button class="scene" data-id="${esc(s.id)}" data-act="on">${esc(s.name)}</button>`).join("")}</div>`;
+      if (rest.length) html += `<div class="grid">${rest.map(thing).join("")}</div>`;
+      html += `</section>`;
+    }
+    if (!rooms.length) html += `<p class="foot">${esc(t("Nothing to control here yet."))}</p>`;
+    const lines = String(d.note || "").split("\n").map((l) => l.trim()).filter(Boolean);
+    if (lines.length || d.wifi) {
+      html += `<section class="notes"><h2>${esc(t("House notes"))}</h2>`;
+      html += lines.map((l) => (l.startsWith("- ") ? `<div class="li">${bold(l.slice(2))}</div>` : `<p>${bold(l)}</p>`)).join("");
+      if (d.wifi) {
+        html += `<dl class="wifi"><dt>${esc(t("Wi-Fi"))}</dt><dd>${esc(d.wifi.ssid)}</dd><span></span>`;
+        if (d.wifi.password) html += `<dt>${esc(t("Password"))}</dt><dd class="pw">${esc(d.wifi.password)}</dd><button class="copy" data-copy="1">${esc(t("Copy"))}</button>`;
+        html += `</dl>`;
+      }
+      html += `</section>`;
+    }
+    app.innerHTML = html;
+  }
+
+  // Taps. A light tile: a tap turns it on or off; a slide sideways sets how bright, as on the wall.
+  app.addEventListener("click", (e) => {
+    const el = e.target.closest("button");
+    if (!el || el.classList.contains("tile")) return;
+    if (el.dataset.copy) {
+      navigator.clipboard?.writeText(data.wifi.password).then(() => toast(t("Copied")), () => {});
+      return;
+    }
+    if (el.dataset.alloff) {
+      const room = (data.rooms || []).find((r) => r.room === el.dataset.alloff);
+      for (const x of room ? room.things : []) if (x.kind === "light" && x.state === "on") { x.state = "off"; send(x.id, "off"); }
+      return draw();
+    }
+    if (el.dataset.temp) {
+      const x = findThing(el.dataset.id);
+      if (!x || typeof x.target !== "number") return;
+      const step = x.unit === "°F" ? 1 : 0.5;
+      const range = (data.range || {})[x.id];
+      let next = x.target + step * Number(el.dataset.temp);
+      if (range) next = Math.max(range[0], Math.min(range[1], next));
+      if (next === x.target) return;
+      x.target = next;
+      draw();
+      clearTimeout(pending.get(x.id));
+      pending.set(x.id, setTimeout(() => send(x.id, "target", next), 700));
+      return;
+    }
+    if (el.dataset.act) {
+      if (el.classList.contains("scene")) { el.classList.add("done"); setTimeout(() => el.classList.remove("done"), 1200); }
+      send(el.dataset.id, el.dataset.act);
+    }
+  });
+
+  function findThing(id) {
+    for (const r of data.rooms || []) for (const x of r.things) if (x.id === id) return x;
+  }
+
+  let drag = null;
+  app.addEventListener("pointerdown", (e) => {
+    const el = e.target.closest(".tile");
+    if (!el) return;
+    drag = { el, x: e.clientX, y: e.clientY, moved: false, lvl: null, sent: 0 };
+  });
+  app.addEventListener("pointermove", (e) => {
+    if (!drag || drag.el.dataset.kind !== "light") return;
+    const dx = e.clientX - drag.x;
+    if (!drag.moved && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(e.clientY - drag.y)) {
+      drag.moved = true;
+      drag.el.classList.add("drag");
+      drag.el.setPointerCapture?.(e.pointerId);
+    }
+    if (!drag.moved) return;
+    const r = drag.el.getBoundingClientRect();
+    const lvl = Math.max(1, Math.min(100, Math.round(((e.clientX - r.left) / r.width) * 100)));
+    drag.lvl = lvl;
+    drag.el.querySelector(".fill").style.transform = `scaleX(${lvl / 100})`;
+    drag.el.querySelector(".st").textContent = lvl + "%";
+    drag.el.classList.add("on");
+    drag.el.classList.remove("off");
+    // One command at a time while sliding, the last value wins.
+    const now = Date.now();
+    if (now - drag.sent > 350) { drag.sent = now; send(drag.el.dataset.id, "level", lvl); }
+  });
+  const end = () => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    d.el.classList.remove("drag");
+    if (d.moved) { if (d.lvl != null) send(d.el.dataset.id, "level", d.lvl); return; }
+    const x = findThing(d.el.dataset.id);
+    if (x) { x.state = x.state === "on" ? "off" : "on"; draw(); }
+    navigator.vibrate?.(8);
+    send(d.el.dataset.id, "toggle");
+  };
+  app.addEventListener("pointerup", end);
+  app.addEventListener("pointercancel", () => { if (drag) drag.el.classList.remove("drag"); drag = null; });
+
+  // Volume: the value goes when the finger lifts, and a few times while it moves.
+  let volSent = 0;
+  app.addEventListener("input", (e) => {
+    if (e.target.type !== "range") return;
+    const now = Date.now();
+    if (now - volSent > 400) { volSent = now; send(e.target.dataset.id, "volume", Number(e.target.value)); }
+  });
+  app.addEventListener("change", (e) => {
+    if (e.target.type === "range") { send(e.target.dataset.id, "volume", Number(e.target.value)); e.target.blur(); }
+  });
+
+  show("loading");
+  read();
+})();
+</script>
+</body>
+</html>

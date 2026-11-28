@@ -63,6 +63,35 @@ class DraftStore:
         for listener in list(self._listeners):
             listener(self.public())
 
+    def set_view(self, view: str, layout: dict[str, Any] | None, before: int) -> None:
+        """A view changed on the wall (a long press) also goes into a draft made on the version before it, like a
+        screen from Magic setup, so publishing that draft later keeps it."""
+        project = self.data.get("project")
+        if not project or self.data.get("base") != before:
+            return
+        for doc in [project, *[s.get("layout") or {} for s in project.get("screens", [])]]:
+            set_view(doc, view, layout)
+        self.data = {**self.data, "change": self.change + 1, "by": BY_ASSISTANT, "note": "Changed a full view from a tablet."}
+        self._store.async_delay_save(lambda: self.data, 1)
+        for listener in list(self._listeners):
+            listener(self.public())
+
+    def set_screen_cards(self, screen: str, widgets: list[dict[str, Any]], rows: int | None, before: int) -> None:
+        """Cards arranged on the wall also go into a draft made on the version before, so publishing it keeps them."""
+        project = self.data.get("project")
+        if not project or self.data.get("base") != before:
+            return
+        layout = project if not screen else next((s.get("layout") for s in project.get("screens", []) if s.get("id") == screen), None)
+        if layout is None:
+            return
+        layout["widgets"] = copy.deepcopy(widgets)
+        if rows:
+            layout.setdefault("grid", {})["rows"] = rows
+        self.data = {**self.data, "change": self.change + 1, "by": BY_ASSISTANT, "note": "Arranged the cards on a tablet."}
+        self._store.async_delay_save(lambda: self.data, 1)
+        for listener in list(self._listeners):
+            listener(self.public())
+
     def save_from_studio(self, project: dict[str, Any], base: int, seen: int) -> bool:
         """The studio's own change. Refused when the assistant changed the draft after the studio last looked."""
         if self.data.get("by") == BY_ASSISTANT and seen < self.change and self.data.get("base") == base:
@@ -103,3 +132,17 @@ class DraftStore:
     def async_listen(self, listener: Callable[[dict[str, Any]], None]) -> Callable[[], None]:
         self._listeners.add(listener)
         return lambda: self._listeners.discard(listener)
+
+
+def set_view(doc: dict[str, Any], view: str, layout: dict[str, Any] | None) -> None:
+    """Sets one view's choices in a layout's house look (theme.views), or removes them when layout is empty."""
+    theme = doc.setdefault("theme", {})
+    views = dict(theme.get("views") or {})
+    if layout:
+        views[view] = copy.deepcopy(layout)
+    else:
+        views.pop(view, None)
+    if views:
+        theme["views"] = views
+    else:
+        theme.pop("views", None)

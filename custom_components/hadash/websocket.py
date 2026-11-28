@@ -4,6 +4,7 @@ only an admin can publish."""
 from __future__ import annotations
 
 import copy
+import json
 import re
 from typing import Any
 import unicodedata
@@ -12,11 +13,12 @@ import voluptuous as vol
 
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.network import NoURLAvailableError, get_url
 
 from .assistant import conversation_agents
 from .const import DOMAIN, DRAFT, PRO
-from .draft import DraftStore
+from .draft import DraftStore, set_view
 from .eufy import ws_eufy_sleep
 from .eufy_live import ws_eufy_live
 from .firetv import ws_tv_find, ws_tv_forget, ws_tv_setup, ws_tv_update_app
@@ -43,6 +45,8 @@ def async_register_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_publish)
     websocket_api.async_register_command(hass, ws_subscribe)
     websocket_api.async_register_command(hass, ws_magic_add_screen)
+    websocket_api.async_register_command(hass, ws_view_save)
+    websocket_api.async_register_command(hass, ws_screen_arrange)
     websocket_api.async_register_command(hass, ws_history)
     websocket_api.async_register_command(hass, ws_version)
     websocket_api.async_register_command(hass, ws_pro)
@@ -156,6 +160,165 @@ async def ws_magic_add_screen(hass: HomeAssistant, connection: websocket_api.Act
     drafts: DraftStore = hass.data[DRAFT]
     drafts.add_screen(screen, before)
     connection.send_result(msg["id"], {"id": screen["id"], "revision": data["revision"]})
+
+
+VIEW_KEYS = vol.All([vol.All(str, vol.Length(max=40))], vol.Length(max=20))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "hadash/view/save",
+        vol.Required("view"): vol.All(str, vol.Match(r"^[a-z_]{1,30}$")),
+        vol.Required("layout"): vol.Schema({vol.Optional("order"): VIEW_KEYS, vol.Optional("hidden"): VIEW_KEYS, vol.Optional("tiles"): VIEW_KEYS}),
+    }
+)
+@websocket_api.async_response
+async def ws_view_save(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """A full view changed on the wall: a long press hides a section or moves it (Radu, 2026-11-27).
+
+    Any signed-in user may do this, as with Magic setup, since a wall tablet often uses a login that is not an
+    admin. It can only change that one view's sections and tiles (theme.views), on every screen; nothing else.
+    """
+    if connection.user is None:
+        connection.send_error(msg["id"], "unauthorized", "Sign in first.")
+        return
+    store: LayoutStore = hass.data[DOMAIN]
+    if not store.layout:
+        connection.send_error(msg["id"], "no_layout", "Nothing was published yet.")
+        return
+    if store.layout.get("wallChanges") == "off":
+        connection.send_error(msg["id"], "locked", "Changes on the wall are turned off in the studio.")
+        return
+    if guest_mode_on(hass):
+        connection.send_error(msg["id"], "guest", "Not while guest mode is on.")
+        return
+    before = store.data.get("revision", 0)
+    project = copy.deepcopy(store.layout)
+    layout = {k: v for k, v in msg["layout"].items() if v}
+    for doc in [project, *[s.get("layout") or {} for s in project.get("screens", [])]]:
+        set_view(doc, msg["view"], layout)
+    data = await store.async_publish(project, connection.user.name)
+    drafts: DraftStore = hass.data[DRAFT]
+    drafts.set_view(msg["view"], layout, before)
+    connection.send_result(msg["id"], {"revision": data["revision"]})
+
+
+# What a wall tablet may change on a card: its place, its size and whether it shows (Radu, 2026-11-27).
+WALL_CARD_KEYS = ("x", "y", "w", "h", "off", "sizes")
+
+
+# Cards a wall may add ("Add a card"), and the one kind of device each may name (renderer lib/wallAdd.ts WALL_ADD).
+# Never a camera, a lock, the alarm, the garage or the family's places: those are added in the studio.
+WALL_ADD_TYPES: dict[str, str | None] = {
+    "room": None, "timer": None, "today": "weather", "forecast": "weather", "media": "media_player", "lights": None,
+    "climate": "climate", "calendar": None, "scenes": None, "smart": None, "home": None, "energyuse": None, "air": None,
+}
+WALL_ADD_KEYS = {"type", "x", "y", "w", "h", "entity", "area", "current"}
+
+
+def wall_card_ok(card: dict[str, Any]) -> bool:
+    """A card a wall may add: a safe kind, no settings beyond its device or room, and a device of the right kind."""
+    kind = card.get("type")
+    if kind not in WALL_ADD_TYPES or not set(card) <= WALL_ADD_KEYS:
+        return False
+    entity, domain = card.get("entity"), WALL_ADD_TYPES[kind]
+    if entity is not None and (domain is None or not isinstance(entity, str) or not entity.startswith(f"{domain}.")):
+        return False
+    if "area" in card and (kind != "room" or not isinstance(card["area"], str)):
+        return False
+    return "current" not in card or card["current"] is False
+
+
+def same_cards(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> bool:
+    """True when "after" holds the cards of "before" (in any order) with only their place, size and "off" changed,
+    plus any new cards a wall may add (wall_card_ok). Anything else, such as a removed card, another entity or a
+    changed setting, is refused."""
+    def plain(card: dict[str, Any]) -> str:
+        return json.dumps({k: v for k, v in card.items() if k not in WALL_CARD_KEYS}, sort_keys=True)
+
+    left = [plain(c) for c in before]
+    for c in after:
+        p = plain(c)
+        if p in left:
+            left.remove(p)
+        elif not wall_card_ok(c):
+            return False
+    if left or len(after) > len(before) + 20:
+        return False
+    for c in after:
+        for k in ("x", "y", "w", "h"):
+            if k in c and not (isinstance(c[k], (int, float)) and 0 <= c[k] <= 200):
+                return False
+        if "off" in c and c["off"] is not True:
+            return False
+    return True
+
+
+def guest_mode_on(hass: HomeAssistant) -> bool:
+    """The integration's guest switch is on."""
+    reg = er.async_get(hass)
+    for entry in reg.entities.values():
+        if entry.platform == DOMAIN and entry.domain == "switch":
+            state = hass.states.get(entry.entity_id)
+            if state and state.state == "on":
+                return True
+    return False
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "hadash/screen/arrange",
+        vol.Required("screen"): vol.All(str, vol.Length(max=80)),
+        vol.Required("widgets"): vol.All([dict], vol.Length(max=200)),
+        vol.Optional("rows"): vol.All(int, vol.Range(min=1, max=200)),
+    }
+)
+@websocket_api.async_response
+async def ws_screen_arrange(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Changes made on the wall itself: cards swapped, made larger or smaller, hidden or shown again (Radu, 2026-11-27).
+
+    Any signed-in user may do this, as with Magic setup, since a wall tablet often uses a login that is not an admin.
+    Only one screen changes, and only the place, size and "off" of its own cards: the same cards must come back.
+    Refused when the owner turned off "Allow changes on the wall" (wallChanges "off") or guest mode is on.
+    """
+    if connection.user is None:
+        connection.send_error(msg["id"], "unauthorized", "Sign in first.")
+        return
+    store: LayoutStore = hass.data[DOMAIN]
+    if not store.layout:
+        connection.send_error(msg["id"], "no_layout", "Nothing was published yet.")
+        return
+    if store.layout.get("wallChanges") == "off":
+        connection.send_error(msg["id"], "locked", "Changes on the wall are turned off in the studio.")
+        return
+    if guest_mode_on(hass):
+        connection.send_error(msg["id"], "guest", "Not while guest mode is on.")
+        return
+    before = store.data.get("revision", 0)
+    project = copy.deepcopy(store.layout)
+
+    def target(doc: dict[str, Any]) -> dict[str, Any] | None:
+        if not msg["screen"]:
+            return doc
+        return next((s.get("layout") for s in doc.get("screens", []) if s.get("id") == msg["screen"]), None)
+
+    layout = target(project)
+    if layout is None:
+        connection.send_error(msg["id"], "no_screen", "This screen is not in the layout.")
+        return
+    if (layout.get("grid") or {}).get("free"):
+        connection.send_error(msg["id"], "free_layout", "Cards on a free layout move in the studio.")
+        return
+    if not same_cards(layout.get("widgets") or [], msg["widgets"]):
+        connection.send_error(msg["id"], "changed", "The screen changed in the meantime.")
+        return
+    layout["widgets"] = msg["widgets"]
+    if "rows" in msg:
+        layout.setdefault("grid", {})["rows"] = msg["rows"]
+    data = await store.async_publish(project, connection.user.name)
+    drafts: DraftStore = hass.data[DRAFT]
+    drafts.set_screen_cards(msg["screen"], msg["widgets"], msg.get("rows"), before)
+    connection.send_result(msg["id"], {"revision": data["revision"]})
 
 
 @websocket_api.websocket_command({vol.Required("type"): "hadash/layout/subscribe"})

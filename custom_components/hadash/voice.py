@@ -244,7 +244,9 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
 
     @callback
     def plan(*_: Any) -> None:
-        send({"action": "plan", "pro": pro.state()["plan"] != "free"})
+        # trialEnds: the tablet rests the trial's Pro moments at that time by itself (the first-wow trial, 2026-11-27).
+        ends = pro.trial_ends()
+        send({"action": "plan", "pro": pro.state()["plan"] != "free", **({"trialEnds": ends} if ends else {})})
 
     stop_plan = pro.async_listen(plan)
 

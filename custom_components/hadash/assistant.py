@@ -59,7 +59,7 @@ SINGLE: dict[str, tuple[str, ...]] = {
 }
 OPTIONAL_ENTITY = {"energy": ("sensor",)}
 HOUSE = ("scenes", "doors", "shades", "family", "air", "calendar", "timer", "logbook", "smart", "home", "note",
-         "photo", "webpage", "network", "custom", "lights")
+         "photo", "webpage", "network", "custom", "lights", "energyuse", "intercom", "drive")
 TYPES = {"room", *SINGLE, *OPTIONAL_ENTITY, *HOUSE}
 MENU_TYPES = {"climate", "media", "weather", "status", "shades", "family", "scenes", "voice", "video", "news", "checkup", "cameras", "tv", "rooms"}
 LOOKS = {
@@ -117,6 +117,10 @@ Cards about one device ("entity" is required, of the kinds given):
 - device: a switch, plug, fan, lock, vacuum, script, button, sensor value, automation, siren, humidifier or cover.
 - todo: a to-do list (todo). alarm: an alarm keypad (alarm_control_panel).
 - energy: home energy use; entity is an optional power sensor.
+- energyuse: energy without a meter, no entity: the week's one plain tip and where the energy goes, guessed
+  from each device's on and off times.
+- drive: drive time, no entity: in the hour before, when to leave for the next calendar event with a place
+  (or the drive to work), how long the drive is and the traffic in words. Quiet the rest of the day.
 
 Room card: type "room", area (an area id or name), optional scenes (scene ids, in order), sceneCount (3),
 exclude (entity ids to leave out), hideScenes, hideAllOff, temperature (a sensor). It shows the room's lights as
@@ -1099,7 +1103,26 @@ def home_readings(hass: HomeAssistant, assistant: str | None, kind: str | None, 
         rows.append({"name": state.name, "kind": dc, "value": state.state,
                      "unit": state.attributes.get("unit_of_measurement"), "area": where})
     rows.sort(key=lambda r: (r["area"] == "", r["area"], r["kind"], r["name"]))
-    return {"readings": rows[:60], "more": max(0, len(rows) - 60)}
+    out: dict[str, Any] = {"readings": rows[:60], "more": max(0, len(rows) - 60)}
+    # Energy without a meter: the week's guess, when asked about energy (never who was away).
+    from .energy import ENERGY  # noqa: PLC0415
+
+    guess = getattr(hass.data.get(ENERGY), "state", None)
+    if guess and guess.get("ready") and (not kinds or kinds & {"energy", "power"}):
+        def label(g: dict[str, Any]) -> str:
+            if g["kind"] == "lights":
+                return f"{g['area']} lights" if g.get("area") else "Lights"
+            if g["kind"] == "climate":
+                return "Heating and cooling"
+            s = hass.states.get(g["ids"][0]) if g.get("ids") else None
+            return s.name if s else g["ids"][0]
+
+        out["energy_last_7_days_estimate"] = {
+            "about_kwh": round(guess["kwh"]), "about_cost": round(guess["cost"]) if guess.get("cost") else None,
+            "currency": guess.get("currency"), "used_most": [label(g) for g in guess.get("groups", [])[:3]],
+            "note": "A guess from each device's on and off times, not a meter. Say 'about'.",
+        }
+    return out
 
 
 class ReadingsTool(llm.Tool):

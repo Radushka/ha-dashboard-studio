@@ -481,8 +481,14 @@ async def async_setup(hass: HomeAssistant) -> None:
     async def shared(event: Any) -> None:
         data = dict(event.data)
         link = str(data.get("url") or data.get("text") or "")
-        # Only YouTube videos. Other shares stay for the person's own automations.
+        # YouTube videos, and recipes (Kitchen helper, recipe.py). Other shares stay for the person's own automations.
         if not video_from(link):
+            from .recipe import share as share_recipe
+
+            first = LINK.search(link)
+            reply = await share_recipe(hass, sender, first.group(0) if first else "", str(data.get("entered") or "").strip()) if first else None
+            if reply:
+                await _tell_phone(hass, sender, _notify_service(hass, data, event.context.user_id), reply, False)
             return
         entered = str(data.get("entered") or "").strip()
         service = _notify_service(hass, data, event.context.user_id)

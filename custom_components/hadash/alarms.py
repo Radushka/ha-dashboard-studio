@@ -7,6 +7,8 @@ away for a moment then.
 
 One alarm: {id, time "07:00", days [0..6] (0 is Sunday; empty: one time only), date "2026-11-15" (one time only),
 tablet, where (the screen's name, to show in the list), on, created}. Free, like the kitchen timer.
+
+Sunrise (free, sunrise.py): in the 20 minutes before an alarm, the lights of the tablet's room rise like the sky.
 """
 
 from __future__ import annotations
@@ -49,14 +51,17 @@ class AlarmStore:
     def __init__(self, hass: HomeAssistant) -> None:
         self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, ALARMS_STORAGE_KEY)
         self.alarms: list[dict[str, Any]] = []
+        # The Studio's choices: sunrise before an alarm (sunrise.py).
+        self.settings: dict[str, Any] = {"sunrise": True}
         self._listeners: set[Callable[[list[dict[str, Any]]], None]] = set()
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
         self.alarms = [a for a in data.get("alarms", []) if isinstance(a, dict) and a.get("id")]
+        self.settings = {**self.settings, **(data.get("settings") or {})}
 
     def _changed(self) -> None:
-        self._store.async_delay_save(lambda: {"alarms": self.alarms}, 1)
+        self._store.async_delay_save(lambda: {"alarms": self.alarms, "settings": self.settings}, 1)
         for listener in list(self._listeners):
             listener(self.alarms)
 
@@ -97,6 +102,10 @@ async def async_setup(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_save)
     websocket_api.async_register_command(hass, ws_remove)
     websocket_api.async_register_command(hass, ws_subscribe)
+    websocket_api.async_register_command(hass, ws_settings)
+    from .sunrise import async_setup as async_setup_sunrise
+
+    await async_setup_sunrise(hass)
 
 
 # Like the layout, these work for non-admin logins: wall tablets often use a plain user.
@@ -105,7 +114,20 @@ async def async_setup(hass: HomeAssistant) -> None:
 @websocket_api.websocket_command({vol.Required("type"): "hadash/alarms"})
 @callback
 def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
-    connection.send_result(msg["id"], {"alarms": hass.data[ALARMS].alarms})
+    connection.send_result(msg["id"], {"alarms": hass.data[ALARMS].alarms, "settings": hass.data[ALARMS].settings})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "hadash/alarms/settings", vol.Optional("sunrise"): bool})
+@websocket_api.require_admin
+@callback
+def ws_settings(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """The Studio's choices for wake-up alarms. Without a value it only answers what they are."""
+    store: AlarmStore = hass.data[ALARMS]
+    if "sunrise" in msg:
+        store.settings = {**store.settings, "sunrise": msg["sunrise"]}
+        # Every screen hears it: the tablets' dawn follows the same switch.
+        store._changed()
+    connection.send_result(msg["id"], store.settings)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "hadash/alarms/save", vol.Required("alarm"): ALARM_SCHEMA})
@@ -132,7 +154,7 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
 
     @callback
     def forward(alarms: list[dict[str, Any]]) -> None:
-        connection.send_message(websocket_api.event_message(msg["id"], {"alarms": alarms}))
+        connection.send_message(websocket_api.event_message(msg["id"], {"alarms": alarms, "settings": store.settings}))
 
     connection.subscriptions[msg["id"]] = store.async_listen(forward)
     connection.send_result(msg["id"])

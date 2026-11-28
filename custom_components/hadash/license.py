@@ -11,7 +11,7 @@ import base64
 import hashlib
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Any
 
 import aiohttp
@@ -170,6 +170,17 @@ class ProManager:
             self._save()
         used = (dt_util.as_local(seen).date() - dt_util.as_local(start).date()).days
         return max(TRIAL_DAYS - used, 0)
+
+    def trial_ends(self) -> str | None:
+        """When the trial ends (local midnight), or None outside a trial. The wall tablets rest the trial's
+        moments by themselves at that time, with no new message from Home Assistant."""
+        if self.license() or self.trial_days_left() <= 0:
+            return None
+        start = dt_util.parse_datetime(self.data.get("trial_start", ""))
+        if start is None:
+            return None
+        day = dt_util.as_local(start).date() + timedelta(days=TRIAL_DAYS)
+        return datetime.combine(day, time(), dt_util.get_default_time_zone()).isoformat()
 
     def state(self) -> dict[str, Any]:
         """What the studio needs: plan pro / trial / free, days left, and who the license is for."""

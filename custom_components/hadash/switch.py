@@ -20,6 +20,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import DOMAIN
+from .guest_link import LINKS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ class GuestSwitch(SwitchEntity, RestoreEntity):
         if last is not None:
             self._attr_is_on = last.state == STATE_ON
             self._by_calendar = bool(last.attributes.get("by_calendar"))
+        self._tell_link()
         self._follow_calendar()
         # A new publish may choose another calendar.
         self.async_on_remove(self.hass.data[DOMAIN].async_listen(lambda _data: self._follow_calendar()))
@@ -85,6 +87,14 @@ class GuestSwitch(SwitchEntity, RestoreEntity):
     def _set(self, on: bool) -> None:
         self._attr_is_on = on
         self.async_write_ha_state()
+        self._tell_link()
+
+    @callback
+    def _tell_link(self) -> None:
+        # The guest phone link works only in guest mode, and ends when guest mode ends (guest_link.py).
+        links = self.hass.data.get(LINKS)
+        if links is not None:
+            links.guest_changed(bool(self._attr_is_on))
 
     # ---- The calendar ----
 

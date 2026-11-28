@@ -216,6 +216,8 @@ class Follow:
             return
         if new.attributes.get("device_class") not in SIGN_CLASSES or not self._anything_plays():
             return
+        if (e := er.async_get(self.hass).async_get(new.entity_id)) and e.platform == DOMAIN:
+            return
         area = self.entity_area(new.entity_id)
         if not area:
             return
@@ -295,10 +297,14 @@ class Follow:
         return found.name if found else fallback
 
     def _sensors(self, area: str) -> list[Any]:
+        # Our own room presence sensors are left out: the tablets' signs come here directly (rooms.py).
+        reg = er.async_get(self.hass)
         return [
             s
             for s in self.hass.states.async_all("binary_sensor")
-            if s.attributes.get("device_class") in SIGN_CLASSES and self.entity_area(s.entity_id) == area
+            if s.attributes.get("device_class") in SIGN_CLASSES
+            and self.entity_area(s.entity_id) == area
+            and not ((e := reg.async_get(s.entity_id)) and e.platform == DOMAIN)
         ]
 
     def last_sign(self, area: str, now: float) -> tuple[float | None, bool]:

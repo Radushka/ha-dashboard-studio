@@ -6,6 +6,12 @@ smoke, carbon monoxide and gas it turns the lights on, so people can see their w
 opens the garage. It ends on every tablet when someone touches "I see it" (or says it). When the sensor clears, the
 tablets say so and stop the alarm.
 
+The wall hears alarms (free, on by default): a tablet that listens hears the beep pattern of a smoke or carbon
+monoxide alarm, even one that is not smart (renderer lib/wake/alarmEar.ts, the Android app's AlarmEar.kt). It
+sends one word ("smoke", "co"), and the emergency starts as if a sensor had turned on, in the tablet's room. When
+the beeping has stopped for 30 seconds, the tablet says "quiet" and the emergency turns clear. A low battery chirp
+("chirp") is no emergency: it becomes a calm notice in the day (notices.py).
+
 Soon (the tablets notice it, renderer lib/nudgeRules.ts): something that matters within minutes, such as rain in a
 few minutes with windows open, or the fridge door left open. A tablet asks here before each round: one tablet shows
 it, again every 5 minutes, at most 3 times; then Home Assistant tells the phones once instead.
@@ -43,14 +49,17 @@ SOON_EVERY_S = 5 * 60
 SOON_ROUNDS = 3
 SOON_REST_S = 3600
 
-SETTINGS_SCHEMA = vol.Schema({vol.Required("on"): bool, vol.Optional("lights", default=True): bool})
+# After "I see it", a heard alarm in the same room waits this long: it may still beep while people deal with it.
+HEARD_REST_S = 10 * 60
+
+SETTINGS_SCHEMA = vol.Schema({vol.Required("on"): bool, vol.Optional("lights", default=True): bool, vol.Optional("heard", default=True): bool})
 
 WORDS = {
     # The phone message: kind -> "{what} in {where}." / "{what}.".
-    "en": {"smoke": "Smoke", "co": "Carbon monoxide", "gas": "Gas", "leak": "Water leak", "in": "{what} in {where}.", "alone": "{what}."},
-    "fr": {"smoke": "Fumée", "co": "Monoxyde de carbone", "gas": "Gaz", "leak": "Fuite d'eau", "in": "{what} : {where}.", "alone": "{what}."},
-    "de": {"smoke": "Rauch", "co": "Kohlenmonoxid", "gas": "Gas", "leak": "Wasserleck", "in": "{what}: {where}.", "alone": "{what}."},
-    "es": {"smoke": "Humo", "co": "Monóxido de carbono", "gas": "Gas", "leak": "Fuga de agua", "in": "{what} en {where}.", "alone": "{what}."},
+    "en": {"smoke": "Smoke", "co": "Carbon monoxide", "gas": "Gas", "leak": "Water leak", "in": "{what} in {where}.", "alone": "{what}.", "heard": "A wall tablet heard the alarm."},
+    "fr": {"smoke": "Fumée", "co": "Monoxyde de carbone", "gas": "Gaz", "leak": "Fuite d'eau", "in": "{what} : {where}.", "alone": "{what}.", "heard": "Une tablette murale a entendu l'alarme."},
+    "de": {"smoke": "Rauch", "co": "Kohlenmonoxid", "gas": "Gas", "leak": "Wasserleck", "in": "{what}: {where}.", "alone": "{what}.", "heard": "Ein Wandtablet hat den Alarm gehört."},
+    "es": {"smoke": "Humo", "co": "Monóxido de carbono", "gas": "Gas", "leak": "Fuga de agua", "in": "{what} en {where}.", "alone": "{what}.", "heard": "Una tableta de pared oyó la alarma."},
 }
 
 
@@ -58,7 +67,9 @@ class Safety:
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
         self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
-        self.settings: dict[str, Any] = {"on": True, "lights": True}
+        self.settings: dict[str, Any] = {"on": True, "lights": True, "heard": True}
+        # Heard alarms: "heard:<screen>" -> rest until (after "I see it").
+        self._heard_rest: dict[str, float] = {}
         self.emergency: dict[str, Any] | None = None
         self.soons: dict[str, dict[str, float]] = {}
         self._listeners: list[Any] = []
@@ -133,11 +144,12 @@ class Safety:
         # The same sensor again while its emergency is on screen: nothing new.
         if self.emergency and self.emergency["entity_id"] == entity_id and not self.emergency.get("clear") and not self.emergency.get("seen"):
             return
-        where = self._where(entity_id)
-        name = str(s.attributes.get("friendly_name") or entity_id)
-        self.emergency = {"id": f"{entity_id}:{int(time.time())}", "kind": kind, "entity_id": entity_id, "name": name, "where": where, "since": time.time()}
+        await self._raise(kind, entity_id, str(s.attributes.get("friendly_name") or entity_id), self._where(entity_id))
+
+    async def _raise(self, kind: str, entity_id: str, name: str, where: str, **extra: Any) -> None:
+        self.emergency = {"id": f"{entity_id}:{int(time.time())}", "kind": kind, "entity_id": entity_id, "name": name, "where": where, "since": time.time(), **extra}
         self._tell()
-        self.hass.bus.async_fire(EVENT_EMERGENCY, {"kind": kind, "entity_id": entity_id, "where": where})
+        self.hass.bus.async_fire(EVENT_EMERGENCY, {"kind": kind, "entity_id": entity_id, "where": where, **extra})
         lit = False
         if kind in LIGHTS_FOR and self.settings.get("lights"):
             lights = [x.entity_id for x in self.hass.states.async_all("light") if x.state == "off"]
@@ -147,16 +159,55 @@ class Safety:
                     lit = True
                 except Exception:  # noqa: BLE001 - the alarm still goes out
                     _LOGGER.warning("Emergency: could not turn the lights on")
-        told = await self._phones(self.text(kind, where), critical=True)
+        told = await self._phones(self.text(kind, where, heard=bool(extra.get("heard"))), critical=True)
         # The tablets say what was done, only when it was.
         if self.emergency and self.emergency["entity_id"] == entity_id and (told or lit):
             self.emergency = {**self.emergency, "phones": told, "lights": lit}
             self._tell()
 
-    def text(self, kind: str, where: str) -> str:
+    # The wall hears alarms.
+
+    def _screen_where(self, screen: str) -> str:
+        from .follow import FOLLOW
+
+        follow = self.hass.data.get(FOLLOW)
+        area_id = follow.area_of(screen) if follow else None
+        area = ar.async_get(self.hass).async_get_area(area_id) if area_id else None
+        return area.name if area else ""
+
+    async def heard(self, kind: str, screen: str) -> None:
+        """A tablet heard an alarm's pattern ("smoke", "co"), a low battery chirp ("chirp"), or that it stopped ("quiet")."""
+        key = f"heard:{screen}"
+        where = self._screen_where(screen)
+        if kind == "quiet":
+            if self.emergency and self.emergency["entity_id"] == key and not self.emergency.get("clear"):
+                self.emergency = {**self.emergency, "clear": True}
+                self._tell()
+            return
+        if not self.settings.get("on") or not self.settings.get("heard", True):
+            return
+        if kind == "chirp":
+            from .notices import NOTICES
+
+            notices = self.hass.data.get(NOTICES)
+            if notices is not None:
+                notices.chirp(screen, where)
+            return
+        if kind not in ("smoke", "co"):
+            return
+        # Any emergency on screen already says it (and the tablets' own alarm sound must not raise another).
+        if self.emergency and not self.emergency.get("clear"):
+            return
+        if time.time() < self._heard_rest.get(key, 0):
+            return
+        _LOGGER.info("Emergency: %s heard by screen %s (%s)", kind, screen, where or "no room")
+        await self._raise(kind, key, "", where, heard=True)
+
+    def text(self, kind: str, where: str, heard: bool = False) -> str:
         lang = (self.hass.config.language or "en")[:2]
         w = WORDS.get(lang, WORDS["en"])
-        return w["in"].format(what=w[kind], where=where) if where else w["alone"].format(what=w[kind])
+        out = w["in"].format(what=w[kind], where=where) if where else w["alone"].format(what=w[kind])
+        return f"{out} {w['heard']}" if heard else out
 
     async def _phones(self, text: str, critical: bool = False) -> int:
         services: list[str] = []
@@ -178,6 +229,8 @@ class Safety:
     def seen(self, emergency_id: str) -> None:
         """Someone touched "I see it": the alarm ends on every tablet."""
         if self.emergency and self.emergency["id"] == emergency_id:
+            if self.emergency.get("heard"):
+                self._heard_rest[self.emergency["entity_id"]] = time.time() + HEARD_REST_S
             self.emergency = None
             self._tell()
 
@@ -208,7 +261,7 @@ async def async_setup(hass: HomeAssistant) -> None:
     await safety.async_load()
     hass.data[SAFETY] = safety
     safety.start()
-    for command in (ws_subscribe, ws_seen, ws_settings, ws_soon, ws_soon_answered):
+    for command in (ws_subscribe, ws_seen, ws_settings, ws_soon, ws_soon_answered, ws_heard):
         websocket_api.async_register_command(hass, command)
 
 
@@ -268,4 +321,13 @@ async def ws_soon(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
 @callback
 def ws_soon_answered(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     hass.data[SAFETY].soon_answered(msg["key"])
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "hadash/safety/heard", vol.Required("kind"): vol.In(("smoke", "co", "chirp", "quiet")), vol.Required("screen"): vol.All(str, vol.Length(max=200))}
+)
+@websocket_api.async_response
+async def ws_heard(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    await hass.data[SAFETY].heard(msg["kind"], msg["screen"])
     connection.send_result(msg["id"])

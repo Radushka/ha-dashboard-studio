@@ -18,14 +18,21 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.start import async_at_started
 
 from .alarms import async_setup as async_setup_alarms
+from .care import async_setup as async_setup_care
+from .family_window import async_setup as async_setup_family_window
 from .intercom import async_setup as async_setup_intercom
 from .gestures import async_setup as async_setup_gestures
+from .energy import async_setup as async_setup_energy
+from .drive import async_setup as async_setup_drive
 from .eufy_live import async_setup as async_setup_eufy_live
+from .door_talk import async_setup as async_setup_door_talk
 from .notices import async_setup as async_setup_notices
 from .nudges import async_setup as async_setup_nudges
 from .replay import async_setup as async_setup_replay
+from .habits import async_setup as async_setup_habits
 from .safety import async_setup as async_setup_safety
 from .phones import async_setup as async_setup_phones
+from .guest_link import async_setup as async_setup_guest_link
 from .reminders import async_setup as async_setup_reminders
 from .timed import async_setup as async_setup_timed
 from .assistant import async_register as async_register_assistant
@@ -38,6 +45,7 @@ from .firetv import TvStore
 from .layout import LayoutStore
 from .news import async_register as async_register_news
 from .pages import FreshPageView
+from .hand_model import async_setup_hand_model
 from .license import ProManager
 from .photos import PhotoView
 from .satellite import Satellites
@@ -46,6 +54,7 @@ from .send import async_setup as async_setup_send
 from .hello import async_register as async_register_hello
 from .throw import async_register as async_register_throw
 from .follow import async_setup as async_setup_follow
+from .rooms import async_setup as async_setup_rooms
 from .spots import SpotStore
 from .voice import async_register as async_register_voice
 from .stopping import async_register_stopping
@@ -102,6 +111,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     # On for a while: a heater or a pump on for some minutes, turned off here (free).
     await async_setup_timed(hass)
     await async_setup_phones(hass)
+    # Guest phone link (free): the guest's phone as a small, safe remote while guest mode is on.
+    await async_setup_guest_link(hass)
     await async_setup_intercom(hass)
     # Hand gestures (Pro): a camera next to a TV, the hand tracker on the Mac, the dashboard of that place answers.
     await async_setup_gestures(hass)
@@ -109,10 +120,21 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     await async_setup_safety(hass)
     # Notices (Pro): the home talks first, one calm line on the screen nearest the person.
     await async_setup_notices(hass)
+    # Care (family homes): a calm view of a family member's home, with gentle alerts, and a heart both ways.
+    await async_setup_care(hass)
+    await async_setup_family_window(hass)
     # Eufy live: one owner for each Eufy camera's video, shared by every screen, and an early wake on a ring.
     await async_setup_eufy_live(hass)
+    # Talk at the door (Pro): a tablet's voice comes out of the Eufy doorbell, through the Eufy add-on.
+    await async_setup_door_talk(hass)
     # Home replay (Pro): a picture of each ring and parcel of the day, for the wall's short film of the day.
     await async_setup_replay(hass)
+    # Energy without a meter (free): each device's use guessed from its on and off times, and one tip a week.
+    await async_setup_energy(hass)
+    # Drive time (free): how long the drive to the next calendar place, or to work, takes now with traffic (Waze).
+    await async_setup_drive(hass)
+    # Habits: the home learns the family's days and offers ready automations, one tap to accept (one free, Pro for all).
+    await async_setup_habits(hass)
     # Doorstep watch: our own package monitor, for cameras with an area marked in the studio. It starts once the
     # cameras are up, and looks only after a person leaves.
     hass.data[DOORSTEP] = DoorstepWatch(hass)
@@ -126,8 +148,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async_register_throw(hass)
     # Room to room (Pro): what you watch or hear comes with you to the next room.
     async_setup_follow(hass)
+    # Room presence: the tablets tell which rooms have someone in them, even someone who sits still.
+    async_setup_rooms(hass)
     # A tablet as a TV's ears (Pro): the tablet next to the TV hears, the TV listens, shows and answers.
     async_register_ears(hass)
+    # The hand model for the wall tablets' cameras (Pro), fetched once when a tablet first asks.
+    async_setup_hand_model(hass)
     # The pages first, with "no-cache", so a browser never keeps an old studio.html after an update.
     hass.http.register_view(FreshPageView())
     # Everything else: the asset files have a hash in their names.

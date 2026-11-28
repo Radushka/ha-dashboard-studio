@@ -85,7 +85,11 @@
         "password": "sunny-maple-42",
         "security": "WPA"
       },
-      "note": "Make yourselves at home.\n- Towels are in the hall closet\n- Kids are in bed by **8:30**\n- Pizza menu is on the fridge"
+      "note": "Make yourselves at home.\n- Towels are in the hall closet\n- Kids are in bed by **8:30**\n- Pizza menu is on the fridge",
+      "calls": [
+        { "name": "Mom", "phone": "416 555 0134" },
+        { "name": "Dad", "phone": "416 555 0178" }
+      ]
     }
   }
 }

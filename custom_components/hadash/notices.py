@@ -8,7 +8,10 @@ learning. Each minute it looks for things worth one sentence:
 3. rain: rain starts within 3 hours while windows, awnings or the garage are open.
 4. package: a camera's package sensor (Eufy, Ring, Nest, UniFi, Doorstep watch) says one is waiting.
 5. done: the washer, dryer or dishwasher finished.
-6. battery: a sensor's battery is low (15% or less). Once a week at most.
+6. chirp: a wall tablet heard a smoke alarm chirp, as it does when its battery is low (safety.py). Once a day.
+7. power: cheaper power starts within the hour (power_clock.py), and the dishwasher, washer or dryer waits.
+   Once a day.
+8. battery: a sensor's battery is low (15% or less). Once a week at most.
 
 Nothing is sent to phones and no screen talks by itself. When someone walks up to a screen, that screen asks here
 for the most useful notice (claim). When two screens see the person at the same moment, the one that sees them best
@@ -47,7 +50,7 @@ _LOGGER = logging.getLogger(__name__)
 
 NOTICES = "hadash_notices"
 STORAGE_KEY = "hadash.notices"
-KINDS = ("door", "garage", "rain", "package", "done", "battery")
+KINDS = ("door", "garage", "rain", "package", "done", "chirp", "power", "battery")
 # The order when several fit: safety first, then what needs hands soon, then the rest.
 RANK = {k: i for i, k in enumerate(KINDS)}
 CONTEST_S = 0.6
@@ -92,6 +95,8 @@ class Notices:
         self._forecast_at = 0.0
         self._last: dict[str, str] = {}
         self._finished: dict[str, float] = {}
+        # Chirps a tablet heard: screen -> (when, the room's name).
+        self._chirps: dict[str, tuple[float, str]] = {}
         self._contests: dict[str, list[tuple[float, asyncio.Future[bool]]]] = {}
         self._shown: dict[str, dict[str, Any]] = {}
         self._listeners: list[Any] = []
@@ -325,7 +330,28 @@ class Notices:
             elif t - at >= 120 and not night and not self._resting("done", entity_id):
                 add("done", f"done:{entity_id}:{int(at)}", [{"id": entity_id, "name": self._device_name(entity_id, re.compile(r"\s*(status|state|operation|machine state|run state|cycle)\s*", re.I))}], minutes=int((t - at) // 60))
 
-        # 6. Low batteries, in the day, once a week.
+        # 6. A smoke alarm chirps (heard in the last day), in the day, once a day.
+        for screen, (at, where) in list(self._chirps.items()):
+            if t - at > 86400:
+                self._chirps.pop(screen, None)
+            elif 9 <= now.hour < 21 and not self._resting("chirp", f"heard:{screen}"):
+                add("chirp", f"chirp:{screen}:{now.date()}", [{"id": f"heard:{screen}", "name": where}])
+
+        # 7. Cheaper power soon, and a big machine that could wait for it. Once a day.
+        from .power_clock import POWER_CLOCK
+
+        clock = self.hass.data.get(POWER_CLOCK)
+        if clock is not None:
+            c = clock.state(now)
+            at = dt_util.parse_datetime(c["next_low"]) if c.get("next_low") and c.get("now") != "low" else None
+            if at is not None and 10 * 60 <= at.timestamp() - t <= 60 * 60:
+                machine = self._waiting_machine()
+                if machine and not self._resting("power", machine.entity_id):
+                    kind = "dishwasher" if re.search(r"dish|geschirr|spül|spuel|vaisselle|lavavajillas", machine.entity_id, re.I) else "dryer" if re.search(r"dryer|trockner|seche|sèche|secadora", machine.entity_id, re.I) else "washer"
+                    name = self._device_name(machine.entity_id, re.compile(r"\s*(status|state|operation|machine state|run state|cycle|power|switch)\s*", re.I))
+                    add("power", f"power:{now.date()}", [{"id": machine.entity_id, "name": name}], at=at.isoformat(), machine=kind)
+
+        # 8. Low batteries, in the day, once a week.
         if 9 <= now.hour < 21:
             low: list[tuple[float, dict[str, str]]] = []
             for s in states.async_all("sensor"):
@@ -347,6 +373,26 @@ class Notices:
 
         out.sort(key=lambda n: RANK[n["kind"]])
         return out
+
+    def _waiting_machine(self) -> State | None:
+        """The dishwasher first, then the washer, then the dryer, when it is there and not running."""
+        found: list[tuple[int, State]] = []
+        for s in self.hass.states.async_all():
+            if s.domain not in ("sensor", "switch", "binary_sensor", "select") or not APPLIANCE.search(s.entity_id):
+                continue
+            if s.state in ("unavailable", "unknown") or (s.domain in ("switch", "binary_sensor") and s.state == "on"):
+                continue
+            # A machine that runs now does not wait. Its other sensors (power, energy, time left) say nothing here.
+            if s.domain in ("sensor", "select") and (RUNNING.search(str(s.state)) or not FINISHED.search(str(s.state))):
+                continue
+            order = 0 if re.search(r"dish|geschirr|spül|spuel|lave.?vaisselle|lavavajillas", s.entity_id, re.I) else 1 if re.search(r"wash|wasch|lave.?linge|lavadora", s.entity_id, re.I) else 2
+            found.append((order, s))
+        return min(found, key=lambda x: (x[0], x[1].entity_id))[1] if found else None
+
+    def chirp(self, screen: str, where: str) -> None:
+        """A tablet heard a low battery chirp (safety.py)."""
+        self._chirps[screen] = (time.time(), where)
+        self.check()
 
     # Telling: the nearest screen, once.
 

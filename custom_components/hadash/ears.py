@@ -100,6 +100,19 @@ class Ears:
                 found.append((str(screen["id"]), str(screen.get("name") or screen["id"])))
         return found
 
+    def hands_on(self, screen: str) -> bool:
+        """The TV's "Hand gestures" switch in the studio (on unless turned off): may its tablet watch for hands?"""
+        layout = getattr(self.hass.data.get(DOMAIN), "layout", None) or {}
+        if not isinstance(layout, dict):
+            return True
+        voice: Any = layout.get("voice")
+        for each in layout.get("screens", []):
+            if isinstance(each, dict) and screen and each.get("id") == screen:
+                inner = each.get("layout") if isinstance(each.get("layout"), dict) else {}
+                voice = inner.get("voice") or each.get("voice")
+                break
+        return not (isinstance(voice, dict) and voice.get("hands") is False)
+
     def awake(self, host: str) -> bool:
         """The Fire TV is on (its media player in Home Assistant), whatever app is in front."""
         for state in self.hass.states.async_all("media_player"):
@@ -111,11 +124,11 @@ class Ears:
         """The TV this tablet watches hands for now: its dashboard on the screen, or another app on its Fire TV."""
         if not self.pro:
             return None
-        sides = list(reversed(self.tvs.get(tablet, [])))
+        sides = [t for t in reversed(self.tvs.get(tablet, [])) if self.hands_on(t.screen)]
         tv = next((t for t in sides if t.visible), None)
         if tv is not None:
             return {"screen": tv.screen, "name": tv.name, "dashboard": True, "firetv": self.firetv_of(tv.screen)}
-        for screen, name in [*((t.screen, t.name) for t in sides), *self.picked_by(tablet)]:
+        for screen, name in [*((t.screen, t.name) for t in sides), *((i, n) for i, n in self.picked_by(tablet) if self.hands_on(i))]:
             host = self.firetv_of(screen)
             if host and self.awake(host):
                 return {"screen": screen, "name": name, "dashboard": False, "firetv": host}
