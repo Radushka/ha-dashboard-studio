@@ -1,9 +1,10 @@
 """Drive time for the wall: how long the drive takes right now, with traffic.
 
 The Drive tile and the Smart card ask here when the family calendar has an event with a place, or for the usual
-drive to work. Home Assistant asks Waze, the same free source as Home Assistant's own Waze travel time integration:
-no account, no key, no new device. We use that integration's own library (pywaze), installed the way Home Assistant
-installs it, so a change on Waze's side is fixed by a normal Home Assistant update.
+drive to work. Home Assistant asks Waze for the drive, the same free source as Home Assistant's own Waze travel time
+integration, and OpenStreetMap to find an address: no account, no key, no new device. We use that integration's own
+library (pywaze), installed the way Home Assistant installs it, so a change on Waze's side is fixed by a normal Home
+Assistant update.
 
 Each place is asked at most every 5 minutes, whatever the number of tablets, and the whole home asks at most
 60 times an hour. A place's position is kept, so the address search runs once per place. The drive without traffic
@@ -12,7 +13,7 @@ Each place is asked at most every 5 minutes, whatever the number of tablets, and
 A place can be:
 1. "43.65,-79.38": a position.
 2. A zone's entity id ("zone.work") or a zone's name ("Work").
-3. Any address or place name: Waze finds it, near the home first.
+3. Any address or place name: OpenStreetMap finds it near the home (Waze's own search if that fails).
 """
 
 from __future__ import annotations
@@ -29,6 +30,9 @@ import voluptuous as vol
 
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+from .const import VERSION
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,11 +41,14 @@ FRESH = 5 * 60
 USUAL_FRESH = 24 * 3600
 # After a failed lookup, the same place waits this long before the next try.
 RETRY = 10 * 60
+WARN_EVERY = 30 * 60
 PER_HOUR = 60
 PLACES_KEPT = 200
 # Farther than this is a trip, not a drive: the wall says nothing.
 FAR_KM = 400
 WAIT = 30
+OSM_URL = "https://nominatim.openstreetmap.org/search"
+OSM_HEADERS = {"User-Agent": f"DashboardStudio/{VERSION} (Home Assistant drive time; +https://lukaps.com/dashboardstudio/)"}
 
 COORDS = re.compile(r"^\s*([-+]?\d{1,2}(?:\.\d+)?)\s*,\s*([-+]?\d{1,3}(?:\.\d+)?)\s*$")
 # An online meeting has a link or a meeting word for its place: there is nowhere to drive.
@@ -107,7 +114,9 @@ class Drive:
         self._locks: dict[str, asyncio.Lock] = {}
         self._asked: list[float] = []
         self._calc: Any = None
-        self._warned = False
+        self._osm_lock = asyncio.Lock()
+        self._osm_at = 0.0
+        self._warned_at = 0.0
 
     @property
     def home(self) -> tuple[float, float]:
@@ -164,6 +173,54 @@ class Drive:
         if key in self._places:
             self._places.move_to_end(key)
             return self._places[key]
+        spot = await self._search(place)
+        self._places[key] = spot
+        while len(self._places) > PLACES_KEPT:
+            self._places.popitem(last=False)
+        return spot
+
+    async def _search(self, place: str) -> tuple[float, float] | None:
+        """An address or a place name: OpenStreetMap first, then Waze's own search.
+
+        Waze's address search started refusing requests in November 2026 (HTTP 400), while its routing works,
+        so a free open search finds the place. A failure of both raises; a place nobody knows returns None.
+        """
+        errors: list[Exception] = []
+        for ask in (self._osm, self._waze_search):
+            try:
+                if spot := await ask(place):
+                    return spot
+            except Exception as err:  # noqa: BLE001
+                errors.append(err)
+        # "Venue, 123 Street, City": a search may know the street address but not the venue's name.
+        if "," in place and len(errors) < 2:
+            rest = place.split(",", 1)[1].strip()
+            if rest and any(c.isdigit() for c in rest):
+                return await self._search(rest)
+        if len(errors) == 2:
+            raise errors[0]
+        return None
+
+    async def _osm(self, place: str) -> tuple[float, float] | None:
+        """OpenStreetMap's free search (Nominatim), near the home: at most one ask a second, as its rules ask."""
+        lat, lon = self.home
+        params = {"q": place, "format": "jsonv2", "limit": "1", "viewbox": f"{lon - 1.5},{lat + 1.5},{lon + 1.5},{lat - 1.5}"}
+        if country := (self.hass.config.country or "").lower():
+            params["countrycodes"] = country
+        async with self._osm_lock:
+            wait = self._osm_at + 1.1 - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._osm_at = time.monotonic()
+            session = async_get_clientsession(self.hass)
+            async with asyncio.timeout(WAIT), session.get(OSM_URL, params=params, headers=OSM_HEADERS) as resp:
+                resp.raise_for_status()
+                found = await resp.json()
+        if not found:
+            return None
+        return (float(found[0]["lat"]), float(found[0]["lon"]))
+
+    async def _waze_search(self, place: str) -> tuple[float, float] | None:
         calc = await self._calculator()
         lat, lon = self.home
         async with asyncio.timeout(WAIT):
@@ -178,12 +235,7 @@ class Drive:
                 if "cannot get coords" not in str(err).lower() and not isinstance(err, LookupError):
                     raise
                 found = None
-        spot = (float(found["lat"]), float(found["lon"])) if found and "lat" in found else None
-        self._places[key] = spot
-        while len(self._places) > PLACES_KEPT:
-            self._places.popitem(last=False)
-        return spot
-
+        return (float(found["lat"]), float(found["lon"])) if found and "lat" in found else None
     async def _route(self, to: tuple[float, float], real_time: bool) -> tuple[float, float, str]:
         """Minutes, km and the main road, now."""
         calc = await self._calculator()
@@ -232,14 +284,14 @@ class Drive:
                         usual = usual or None
             except Exception as err:  # noqa: BLE001
                 self._failed[key] = time.time()
-                if not self._warned:
-                    # Once: a wall that shows no drive time should leave a reason in the log.
-                    _LOGGER.warning("Drive time: Waze did not answer (%s). The wall tries again in 10 minutes.", err)
-                    self._warned = True
+                why = f"{type(err).__name__}: {err}"[:200]
+                if time.time() - self._warned_at > WARN_EVERY:
+                    # A wall that shows no drive time leaves a reason in the log, at most every 30 minutes.
+                    _LOGGER.warning("Drive time: no answer for a place (%s). The wall tries again in 10 minutes.", why)
+                    self._warned_at = time.time()
                 else:
                     _LOGGER.debug("Drive time failed for a place", exc_info=True)
-                return self._times.get(key) or {"error": "failed"}
-            self._warned = False
+                return self._times.get(key) or {"error": "failed", "why": why}
             self._failed.pop(key, None)
             usual_min = usual[0] if usual else None
             out = {
@@ -270,6 +322,6 @@ async def ws_time(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
     try:
         out = await drive.time_to(msg["to"])
     except Exception:  # noqa: BLE001
-        _LOGGER.debug("Drive time failed", exc_info=True)
+        _LOGGER.warning("Drive time failed", exc_info=True)
         out = {"error": "failed"}
     connection.send_result(msg["id"], out)

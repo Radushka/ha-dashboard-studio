@@ -7,8 +7,12 @@ carries the sound, as AAC (ADTS frames, 16 kHz mono). So:
    on while the talk lasts, so the doorbell's own sound comes to the tablet with the picture, as usual.
 2. The tablet's microphone sound comes in small pieces ("hadash/door/audio", 16 kHz mu-law, base64). Home
    Assistant's own ffmpeg turns it into AAC, and each whole AAC frame goes on to the add-on at once.
-3. Quick replies ("Please leave it at the door") are spoken by the tablet's voice and sent the same way.
-4. One talk per door: a newer tablet takes over. When the tablet leaves, the speaker closes and the video may sleep.
+3. The doorbell's own sound: the eufy_security integration gives go2rtc only the picture, so the visitor's voice
+   would never reach the tablet. While the talk lasts, Home Assistant also asks the add-on for the live sound
+   ("device.start_livestream" on its own link only adds it as a listener of the video that already runs), turns the
+   AAC into 16 kHz mu-law with ffmpeg and passes it to the tablet in the same small pieces as the intercom.
+4. Quick replies ("Please leave it at the door") are spoken by the tablet's voice and sent the same way.
+5. One talk per door: a newer tablet takes over. When the tablet leaves, the speaker closes and the video may sleep.
 Nothing is recorded or kept.
 """
 
@@ -63,6 +67,16 @@ def adts_frames(buf: bytearray) -> list[bytes]:
     return frames
 
 
+# The tablet's voice (16 kHz mu-law) to AAC for the doorbell, and the doorbell's AAC back to 16 kHz mu-law.
+# The small probe lets the first sound through at once: without it ffmpeg waits about two seconds before it starts.
+ENCODE = ["-hide_banner", "-loglevel", "error", "-probesize", "32", "-analyzeduration", "0",
+          "-f", "mulaw", "-ar", "16000", "-ac", "1", "-i", "pipe:0",
+          "-c:a", "aac", "-profile:a", "aac_low", "-b:a", "32k", "-ar", "16000", "-ac", "1",
+          "-flush_packets", "1", "-f", "adts", "pipe:1"]
+DECODE = ["-hide_banner", "-loglevel", "error", "-probesize", "32", "-analyzeduration", "0", "-f", "aac", "-i", "pipe:0",
+          "-f", "mulaw", "-ar", "16000", "-ac", "1", "-flush_packets", "1", "pipe:1"]
+
+
 def _ffmpeg(hass: HomeAssistant) -> str:
     with contextlib.suppress(Exception):
         from homeassistant.components.ffmpeg import get_ffmpeg_manager  # noqa: PLC0415
@@ -86,6 +100,9 @@ class Talk:
         self.n = 0
         self.leave_video: Callable[[], None] | None = None
         self.closed = False
+        # The doorbell's own sound, decoded for the tablet.
+        self.ear: asyncio.subprocess.Process | None = None
+        self.heard_codec = ""
 
     def _say(self, step: str, why: str = "") -> None:
         self.step = step
@@ -119,6 +136,9 @@ class Talk:
                     fut.set_result(data)
             elif data.get("type") == "event":
                 event = data.get("event", {})
+                if event.get("serialNumber") == self.serial and event.get("event") == "livestream audio data":
+                    self._heard(event)
+                    continue
                 if event.get("serialNumber") == self.serial and event.get("event") == "talkback stopped" and self.step == "open":
                     self._say("ended", "the doorbell closed its speaker")
         if not self.closed:
@@ -166,10 +186,7 @@ class Talk:
             await self.stop()
             return
         self.proc = await asyncio.create_subprocess_exec(
-            _ffmpeg(self.hass), "-hide_banner", "-loglevel", "error", "-fflags", "nobuffer",
-            "-f", "mulaw", "-ar", "16000", "-ac", "1", "-i", "pipe:0",
-            "-c:a", "aac", "-profile:a", "aac_low", "-b:a", "32k", "-ar", "16000", "-ac", "1",
-            "-flush_packets", "1", "-f", "adts", "pipe:1",
+            _ffmpeg(self.hass), *ENCODE,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         )
         self.tasks.append(self.hass.async_create_background_task(self._pump(), f"hadash door talk {self.entity_id}"))
@@ -177,6 +194,45 @@ class Talk:
             await self.stop()
             return
         self._say("open")
+        await self._listen()
+
+    async def _listen(self) -> None:
+        """Ask the add-on for the doorbell's sound (best effort: talk works without it)."""
+        try:
+            await self._ask({"command": "start_listening"})
+            answer = await self._ask({"command": "device.start_livestream", "serialNumber": self.serial})
+            _LOGGER.debug("Door talk %s: listen %s", self.entity_id, answer.get("success") or answer.get("errorCode"))
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Door talk %s: no doorbell sound: %s", self.entity_id, err)
+            return
+        self.ear = await asyncio.create_subprocess_exec(
+            _ffmpeg(self.hass), *DECODE,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        self.tasks.append(self.hass.async_create_background_task(self._ear_pump(), f"hadash door sound {self.entity_id}"))
+
+    def _heard(self, event: dict[str, Any]) -> None:
+        if self.ear is None or self.ear.stdin is None or self.ear.stdin.is_closing() or self.closed:
+            return
+        buf = event.get("buffer")
+        data = buf.get("data") if isinstance(buf, dict) else buf
+        if not isinstance(data, list):
+            return
+        self.heard_codec = str((event.get("metadata") or {}).get("audioCodec") or "")
+        self.ear.stdin.write(bytes(data))
+
+    async def _ear_pump(self) -> None:
+        assert self.ear is not None and self.ear.stdout is not None
+        buf = bytearray()
+        while True:
+            chunk = await self.ear.stdout.read(1600)
+            if not chunk:
+                break
+            buf.extend(chunk)
+            while len(buf) >= 1600:
+                if not self.closed:
+                    self.send({"step": "open", "sound": base64.b64encode(bytes(buf[:1600])).decode()})
+                del buf[:1600]
 
     async def _pump(self) -> None:
         assert self.proc is not None and self.proc.stdout is not None
@@ -236,10 +292,11 @@ class Talk:
         if self.ws is not None and not self.ws.closed and self.serial:
             with contextlib.suppress(Exception):
                 await self._ask({"command": "device.stop_talkback", "serialNumber": self.serial})
-        if self.proc is not None:
-            with contextlib.suppress(Exception):
-                self.proc.kill()
-                await self.proc.wait()
+        for proc in (self.proc, self.ear):
+            if proc is not None:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                    await proc.wait()
         if self.ws is not None:
             with contextlib.suppress(Exception):
                 await self.ws.close()
